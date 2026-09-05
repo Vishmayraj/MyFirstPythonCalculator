@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 
 import httpx
 
@@ -18,6 +19,14 @@ from shared.schemas.vms import GridCameraEntry, GridCatalogueResponse
 logger = logging.getLogger(__name__)
 
 CATALOGUE_POLL_INTERVAL_SECONDS = 60  # re-poll every minute
+
+# Fallback grid host used only when the live catalogue endpoint is
+# unreachable (see the `except` branch in `fetch()` below). Read from the
+# same GRID_RTSP_HOST env var that model1-registry/app/config.py's
+# `Settings.GRID_RTSP_HOST` uses, so the grid IP only has to be changed in
+# one place (an env var) instead of being a second hardcoded literal here
+# that could drift from the "real" one (AuditReport1.md finding 10 / 3.1).
+_FALLBACK_GRID_RTSP_HOST = os.getenv("GRID_RTSP_HOST", "103.250.160.189")
 
 
 class CataloguePoller:
@@ -48,7 +57,8 @@ class CataloguePoller:
         except Exception as e:
             logger.warning(
                 f"Grid catalogue endpoint '{self._catalogue_url}' fetch failed: {e}. "
-                "Using confirmed live grid streams (103.250.160.189:8554, cam01..cam30)."
+                f"Using confirmed live grid streams "
+                f"({_FALLBACK_GRID_RTSP_HOST}:8554, cam01..cam30)."
             )
             fallback_cams = [
                 GridCameraEntry(
@@ -60,8 +70,8 @@ class CataloguePoller:
                     height=1080,
                     fps=30.0,
                     bitrate=4000,
-                    rtsp_url=f"rtsp://103.250.160.189:8554/stream/cam{i:02d}",
-                    webrtc_url=f"http://103.250.160.189:8889/stream/cam{i:02d}/whep",
+                    rtsp_url=f"rtsp://{_FALLBACK_GRID_RTSP_HOST}:8554/stream/cam{i:02d}",
+                    webrtc_url=f"http://{_FALLBACK_GRID_RTSP_HOST}:8889/stream/cam{i:02d}/whep",
                     hls_url=f"https://cctv.corp8.cloud/cam{i:02d}/index.m3u8",
                 )
                 for i in range(1, 31)

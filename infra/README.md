@@ -113,9 +113,12 @@ Where `source_grid_id` is the government grid's camera ID (e.g., `cam01`, `cam06
 
 ### Dynamic Stream Registration
 
-Streams are registered at runtime by the `IngestionSupervisor` — NOT statically in `mediamtx.yml`. To manually register a stream for testing:
+Streams are registered at runtime by the `IngestionSupervisor` — NOT statically in `mediamtx.yml` (there is deliberately no static `paths:` block in that file — see the comment there). To manually register a stream for testing:
 
 ```bash
+# 103.250.160.189 below is the current GRID_RTSP_HOST default (see
+# model1-registry/app/config.py and .env.example) - if you've overridden
+# that env var to point at a different grid host, use that value instead.
 curl -X POST http://localhost:9997/v3/config/paths/add/cam01 \
   -H "Content-Type: application/json" \
   -d '{"source": "rtsp://103.250.160.189:8554/stream/cam01", "sourceOnDemand": false}'
