@@ -9,9 +9,15 @@ services:
     image: sentinel-postgis-pgvector:16-3.4
     pull_policy: build
     environment:
-      POSTGRES_USER: sentinel
-      POSTGRES_PASSWORD: sentinel_dev
-      POSTGRES_DB: sentinel
+      # Overridable via .env/environment (AuditReport1.md finding 12 / 3.3)
+      # - defaults match what every other doc/script in this repo assumes,
+      # so nothing breaks for anyone who doesn't set these. `app`'s
+      # DATABASE_URL below is built from these same three vars, so
+      # overriding POSTGRES_PASSWORD here also flows through automatically
+      # - no need to separately edit DATABASE_URL to keep them in sync.
+      POSTGRES_USER: "${POSTGRES_USER:-sentinel}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:-sentinel_dev}"
+      POSTGRES_DB: "${POSTGRES_DB:-sentinel}"
     ports:
       - "5432:5432"
     volumes:
@@ -44,7 +50,14 @@ services:
     ports:
       - "8000:8000"
     environment:
-      DATABASE_URL: "postgresql://sentinel:sentinel_dev@db:5432/sentinel"
+      # Was a bare literal with no override path at all (AuditReport1.md
+      # finding 12 / 3.3), unlike GRID_HOST/MEDIAMTX_API below which
+      # already used the `${VAR:-default}` pattern. Now built from the
+      # same POSTGRES_USER/PASSWORD/DB vars the `db` service uses above,
+      # so the two can't drift out of sync - or set DATABASE_URL directly
+      # to override the whole connection string at once (e.g. for an
+      # external/managed Postgres instead of the `db` service).
+      DATABASE_URL: "${DATABASE_URL:-postgresql://${POSTGRES_USER:-sentinel}:${POSTGRES_PASSWORD:-sentinel_dev}@db:5432/${POSTGRES_DB:-sentinel}}"
       # No safe default exists for SECRET_KEY - it signs every login
       # session's JWT, and the checked-in app/config.py default is public.
       # Previously there was no way to override this without hand-editing

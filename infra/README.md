@@ -53,8 +53,7 @@ docker compose exec db psql -U sentinel -d sentinel -c "SELECT count(*) FROM cam
 
 ## 🔒 Configuration
 
-Environment settings are configured via `DATABASE_URL` in `docker-compose.yml`:
-`postgresql://sentinel:sentinel_dev@db:5432/sentinel`
+`docker-compose.yml`'s `app` service gets its `DATABASE_URL` built from the same `POSTGRES_USER`/`POSTGRES_PASSWORD`/`POSTGRES_DB` env vars as the `db` service below (defaulting to `postgresql://sentinel:sentinel_dev@db:5432/sentinel` if none are set), so the two can't drift out of sync — override `POSTGRES_PASSWORD` in `.env` and both services pick it up automatically. Set `DATABASE_URL` directly instead if you want `app` to talk to an external/managed Postgres rather than the `db` service entirely. See `.env.example` for all of these.
 
 The `sentinel` role and `sentinel` database themselves need no manual setup — the official Postgres image bootstraps them automatically from the `POSTGRES_USER`/`POSTGRES_PASSWORD`/`POSTGRES_DB` env vars on `db`'s first boot (see `docker-compose.yml`), the same way it would for anyone cloning this repo fresh. If you're running the app or tests directly on the host instead of through Docker, `scripts/bootstrap_local_db.sh` (repo root) does the equivalent one-time setup against a local Postgres install — see `model1-registry/README.md`'s Testing section.
 
