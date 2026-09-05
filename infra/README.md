@@ -56,6 +56,10 @@ docker compose exec db psql -U sentinel -d sentinel -c "SELECT count(*) FROM cam
 Environment settings are configured via `DATABASE_URL` in `docker-compose.yml`:
 `postgresql://sentinel:sentinel_dev@db:5432/sentinel`
 
+The `sentinel` role and `sentinel` database themselves need no manual setup — the official Postgres image bootstraps them automatically from the `POSTGRES_USER`/`POSTGRES_PASSWORD`/`POSTGRES_DB` env vars on `db`'s first boot (see `docker-compose.yml`), the same way it would for anyone cloning this repo fresh. If you're running the app or tests directly on the host instead of through Docker, `scripts/bootstrap_local_db.sh` (repo root) does the equivalent one-time setup against a local Postgres install — see `model1-registry/README.md`'s Testing section.
+
+`DISABLE_INGESTION` (env var on the `app` service, defaults to `true` in this compose file) only turns off RTSP capture/MediaMTX registration — the camera-catalogue poll against the live grid host still runs either way, so the registry stays in sync. That poll is separately skippable via `DISABLE_CATALOGUE_POLL`, which the test suite sets on its own and which you should leave unset here.
+
 ---
 
 ## 🔐 TLS / Reverse Proxy (Caddy)
