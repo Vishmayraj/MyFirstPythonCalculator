@@ -280,21 +280,25 @@ async def stream_camera_by_grid_id(
 @router.get("/{camera_id}/live")
 async def stream_camera_by_uuid(
     camera_id: uuid.UUID,
+    db: Session = Depends(get_db),
     current_user: UserModel = Depends(get_current_user),
 ):
     """
     Streams live video frames for a database camera row.
     """
-    from shared.db.session import _SessionLocal
-    rtsp_url = None
-    grid_id = "cam01"
-    if _SessionLocal is not None:
-        with _SessionLocal() as db:
-            camera = db.query(CameraModel).filter(CameraModel.id == camera_id).first()
-            if not camera:
-                raise HTTPException(status_code=404, detail="Camera not found")
-            rtsp_url = camera.rtsp_url
-            grid_id = camera.source_grid_id or "cam01"
+    # Was reaching for shared.db.session._SessionLocal directly inside a
+    # manual `with` block - a "private," underscore-prefixed module
+    # attribute - instead of the Depends(get_db) pattern every other
+    # endpoint in this file (and the whole codebase) uses. No behavior
+    # change: get_db() raises the same RuntimeError if the engine hasn't
+    # been initialised yet, and FastAPI closes the session for us on the
+    # way out exactly like the old `with` block did (AuditReport1.md
+    # finding 22 / 4.4).
+    camera = db.query(CameraModel).filter(CameraModel.id == camera_id).first()
+    if not camera:
+        raise HTTPException(status_code=404, detail="Camera not found")
+    rtsp_url = camera.rtsp_url
+    grid_id = camera.source_grid_id or "cam01"
 
     if not rtsp_url:
         if grid_id.isdigit():
