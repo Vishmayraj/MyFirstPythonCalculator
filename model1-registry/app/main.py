@@ -188,6 +188,43 @@ app.include_router(gap_analysis.router)
 app.include_router(pages.router)
 
 # ── Model 2 Routers (auto-discovery) ─────────────────────────────
+#
+# This dynamically imports every *.py file in model2-analytics/app/routers/
+# by filesystem path (importlib.util.spec_from_file_location) rather than
+# a normal `from model2_analytics.app.routers import X` import, and mounts
+# whatever has a module-level `router` attribute. Flagged in
+# AuditReport1.md finding 17 as "fragile, worth documenting" rather than
+# a bug to fix outright - it works, but it's a non-obvious pattern with
+# real footguns for whoever touches it next:
+#
+#   * A syntax/import error in one Model-2 router file is swallowed (see
+#     the `except Exception` below) and only shows up as a printed
+#     "[model2] ERROR" line at startup - it does NOT fail the app boot,
+#     so a broken router silently just isn't there instead of crashing
+#     loudly. Check the startup logs if a Model-2 endpoint 404s
+#     unexpectedly.
+#   * Filenames starting with `_` are skipped on purpose (so e.g. a
+#     `_shared_helpers.py` living in this directory isn't mistaken for a
+#     router module) - this is a naming convention, not enforced by
+#     anything else in the codebase.
+#   * The two path candidates below exist because this file has to work
+#     both inside the Docker image (where Dockerfile COPYs model2-analytics/
+#     to /model2-analytics/) and from a local/bare `uvicorn` run (where
+#     it's a sibling directory of model1-registry/) - if you ever change
+#     one of those COPY paths in infra/Dockerfile, update the matching
+#     candidate here too, or Model 2 endpoints will silently disappear
+#     in that environment.
+#   * Why not a normal package import? model2-analytics/ (hyphenated,
+#     the full pipeline) and model2_analytics/ (underscored, a much
+#     smaller shim package - see Section 8 of AuditReport1.md, which
+#     found the underscored copies are ~10x smaller than their
+#     hyphenated counterparts) are two different things in this repo,
+#     both COPY'd into the image and both on PYTHONPATH per
+#     infra/Dockerfile. A plain `import` would go through Python's
+#     normal package resolution (sys.path / PYTHONPATH) and risk
+#     silently picking the wrong one; loading by explicit file path
+#     sidesteps that ambiguity entirely, at the cost of the fragility
+#     documented above.
 _M2_ROUTERS_DIR_CANDIDATES = [
     Path("/model2-analytics/app/routers"),                              # Docker
     local_repo_root / "model2-analytics" / "app" / "routers",          # Local dev
