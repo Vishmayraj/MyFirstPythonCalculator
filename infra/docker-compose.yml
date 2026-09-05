@@ -71,6 +71,17 @@ services:
       DISABLE_INGESTION: "${DISABLE_INGESTION:-true}"
       GRID_RTSP_USER: "${GRID_RTSP_USER:-}"
       GRID_RTSP_PASS: "${GRID_RTSP_PASS:-}"
+    # NOTE: the image now runs as a non-root `appuser` (uid 1000, see
+    # infra/Dockerfile / AuditReport1.md finding 21). These bind mounts
+    # replace the chowned in-image directories with whatever ownership
+    # they have on the host, so on a Linux host where your own user isn't
+    # uid 1000, writes into a mounted path (e.g. the detection pipeline
+    # writing crops into model2-analytics/detection-image) can fail with
+    # a permission error. Not an issue on Docker Desktop (Windows/macOS),
+    # where this project is primarily developed/tested. If you hit this
+    # on Linux, either `chown -R 1000:1000 ../model2-analytics` on the
+    # host once, or add `user: "${UID}:${GID}"` here to match your host
+    # user instead.
     volumes:
       - ../model1-registry/app:/app/app
       - ../model2-analytics:/model2-analytics

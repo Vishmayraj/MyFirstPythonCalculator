@@ -19,6 +19,20 @@ COPY model2-analytics/ /model2-analytics/
 COPY model2-analytics/app/ /app/model2_analytics_src/
 COPY model2_analytics/ /app/model2_analytics/
 
+# Standard hardening: run as a non-root user instead of the container
+# default (root). Not urgent on its own (this app doesn't execute
+# genuinely untrusted input), but cheap to do and limits the blast
+# radius of any future RCE-class bug (AuditReport1.md finding 21 / 4.3).
+# /model2-analytics/{detection-image,uploads} need to stay writable -
+# the detection pipeline and uploads router write into them at runtime -
+# so they're chowned explicitly rather than relying on a blanket
+# `chown -R` catching everything by coincidence.
+RUN useradd --system --create-home --uid 1000 --shell /usr/sbin/nologin appuser && \
+    chown -R appuser:appuser /app /model2-analytics && \
+    mkdir -p /model2-analytics/detection-image /model2-analytics/uploads && \
+    chown -R appuser:appuser /model2-analytics/detection-image /model2-analytics/uploads
+USER appuser
+
 ENV PYTHONPATH=/app:/model2-analytics:/app/model2_analytics_src
 # Runtime config defaults — override via docker-compose environment or .env
 ENV GRID_HOST=cctv.corp8.cloud
