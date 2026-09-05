@@ -19,7 +19,13 @@ model2-analytics/uploads/*
 # ── Model 2 — AI pipeline heavy/generated artifacts (03-Sep-2026) ──
 weights/
 model2-analytics/pipeline/dataset/
-model2-analytics/pipeline/*.pt
+# NOTE: a single '*' doesn't cross a '/' in gitignore, so this only ever
+# matched *.pt files directly inside pipeline/ - not ones in subdirectories
+# like pipeline/detection/. That's exactly how indian_traffic_yolov8.pt (6MB)
+# ended up committed despite this line already existing (AuditReport1.md
+# finding 13 / 3.4). '**/' matches any depth, including zero, so this now
+# also still covers the pipeline/*.pt case the line used to hit.
+model2-analytics/pipeline/**/*.pt
 model2-analytics/pipeline/*.cache
 model2-analytics/pipeline/dataset.yaml
 demo_results/
