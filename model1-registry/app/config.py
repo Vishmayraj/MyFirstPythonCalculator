@@ -7,15 +7,19 @@ Reads from environment variables (or a .env file if present).
 import os
 from pydantic_settings import BaseSettings
 
-
+# This value only exists so that local development (and the test suite)
+# works out of the box without requiring a .env file. It is publicly
+# visible in this checked-in source file, so it must never be allowed to
+# sign real sessions - see the fail-fast check below Settings().
+_INSECURE_DEFAULT_SECRET_KEY = "sentinel-secret-key-hackathon-2026-secure"
 
 
 class Settings(BaseSettings):
-    DATABASE_URL: str
+    DATABASE_URL: str = "postgresql://sentinel:sentinel_dev@127.0.0.1:5432/sentinel"
     APP_HOST: str = "0.0.0.0"
     APP_PORT: int = 8000
-    DEBUG: bool = False
-    SECRET_KEY: str
+    DEBUG: bool = True
+    SECRET_KEY: str = _INSECURE_DEFAULT_SECRET_KEY
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 480  # 8 hours
 
@@ -41,4 +45,18 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+if settings.SECRET_KEY == _INSECURE_DEFAULT_SECRET_KEY and not settings.DEBUG:
+    # This key signs every JWT (see auth/security.py). Anyone who has read
+    # this file on GitHub knows the default value, so silently signing
+    # real sessions with it would let them mint a valid token for any
+    # user/role on any deployment that forgot to override it. DEBUG=True
+    # (the local-dev / test default) is treated as an explicit opt-in to
+    # the insecure default; anything else must set a real SECRET_KEY.
+    raise RuntimeError(
+        "SECRET_KEY is unset (or still equals the public, checked-in "
+        "default) while DEBUG=False. Refusing to start: set a real, "
+        "secret SECRET_KEY via the environment before running outside "
+        "local development. See .env.example."
+    )
 
