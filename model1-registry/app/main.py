@@ -81,7 +81,7 @@ async def lifespan(app: FastAPI):
     poller = CataloguePoller(grid_host=settings.GRID_HOST)
     app.state.poller = poller
 
-    disable_ingestion = os.environ.get("DISABLE_INGESTION", "false").lower() == "true"
+    disable_ingestion = settings.DISABLE_INGESTION
 
     # DISABLE_INGESTION only turns off RTSP/MediaMTX registration - the
     # catalogue poll itself still runs (and still writes to the DB via

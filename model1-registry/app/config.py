@@ -32,6 +32,16 @@ class Settings(BaseSettings):
     # VMS ingestion settings
     GRID_HOST: str = "cctv.corp8.cloud"
     MEDIAMTX_API: str = "localhost:9997"
+    # Turns off RTSP/MediaMTX stream registration while leaving the
+    # camera-catalogue poll itself running (see app/main.py's lifespan()
+    # for the full explanation of what this does and doesn't disable).
+    # Used to be read via a bare os.environ.get() in main.py instead of
+    # going through this Settings object like every other env-driven
+    # value in the app - meaning it wasn't validated, wasn't documented
+    # in .env.example, and wouldn't show up alongside the rest of the
+    # app's config if someone went looking for what's configurable
+    # (AuditReport1.md finding 18).
+    DISABLE_INGESTION: bool = False
 
     # Operational Sentinel Camera Grid gateway settings (configurable via env vars)
     GRID_RTSP_HOST: str = "103.250.160.189"  # Public static IP for direct RTSP & WebRTC

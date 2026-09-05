@@ -68,3 +68,19 @@ def test_real_secret_key_with_debug_false_starts_fine():
         {"DEBUG": "false", "SECRET_KEY": "a-real-randomly-generated-secret"}
     )
     assert result.returncode == 0, result.stderr
+
+
+def test_disable_ingestion_is_read_through_settings():
+    """Regression guard for AuditReport1.md finding 18: DISABLE_INGESTION
+    used to be read via a bare os.environ.get() in main.py instead of
+    the central Settings object - this pins down that Settings itself
+    now parses it from the environment like every other config value."""
+    result = subprocess.run(
+        [sys.executable, "-c", "from app.config import settings; print(settings.DISABLE_INGESTION)"],
+        cwd=str(MODEL1_ROOT),
+        env={**os.environ, "PYTHONPATH": os.pathsep.join([str(MODEL1_ROOT), str(REPO_ROOT)]), "DISABLE_INGESTION": "true"},
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "True"
