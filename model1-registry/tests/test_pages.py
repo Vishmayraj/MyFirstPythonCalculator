@@ -41,6 +41,21 @@ def test_anonymous_redirected_to_login(anon_client):
     assert resp.headers["location"] == "/login"
 
 
+def test_alerts_placeholder_anonymous_redirected_to_login(anon_client):
+    """Regression guard for AuditReport1.md finding 20 / 4.2: the /alerts
+    placeholder page was the one page in this router with no login guard,
+    unlike every sibling page above."""
+    resp = anon_client.get("/alerts", follow_redirects=False)
+    assert resp.status_code == 302
+    assert resp.headers["location"] == "/login"
+
+
+def test_alerts_placeholder_loads_for_authenticated_user(admin_home_client):
+    resp = admin_home_client.get("/alerts")
+    assert resp.status_code == 200
+    assert "Alerts" in resp.text
+
+
 def test_camera_edit_form_own_department_is_editable(admin_home_client, home_camera):
     resp = admin_home_client.get(f"/cameras/{home_camera['id']}/edit")
     assert resp.status_code == 200

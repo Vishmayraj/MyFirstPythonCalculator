@@ -447,11 +447,23 @@ def persons_watchlist_page(
 
 
 @router.get("/alerts", response_class=HTMLResponse)
-def alerts_placeholder(request: Request):
+def alerts_placeholder(
+    request: Request,
+    user: Optional[UserModel] = Depends(get_optional_current_user),
+):
+    # Every other page in this router redirects an anonymous visitor to
+    # /login - this one didn't (AuditReport1.md finding 20 / 4.2), so an
+    # unauthenticated visitor could reach it directly even though it's
+    # gated in the nav for logged-in users only. Nothing sensitive is
+    # rendered here (it's a static "not built yet" placeholder), but the
+    # inconsistency was worth closing to match every sibling page.
+    if not user:
+        return RedirectResponse(url="/login", status_code=302)
     return request.app.state.templates.TemplateResponse(
         request=request,
         name="placeholder.html",
         context={
+            "user": user,
             "page_title": "Alerts",
             "description": "Model 2 — not built yet, see docs/API_Contract.md §2",
         },
