@@ -83,28 +83,51 @@ async def lifespan(app: FastAPI):
 
     disable_ingestion = os.environ.get("DISABLE_INGESTION", "false").lower() == "true"
 
-    if disable_ingestion:
-        async def _db_only_sync(cams):
-            loop = asyncio.get_running_loop()
-            await loop.run_in_executor(None, upsert_cameras_to_db, cams)
+    # DISABLE_INGESTION only turns off RTSP/MediaMTX registration - the
+    # catalogue poll itself still runs (and still writes to the DB via
+    # _db_only_sync below) so the registry stays in sync even with
+    # streaming off. That's fine in normal operation, but it's wrong
+    # during automated tests: CataloguePoller.fetch() makes a real HTTPS
+    # call to the live grid host on every app startup, retries with
+    # exponential backoff (2s -> 30s) whenever that call fails or times
+    # out - which it always does with no network access, e.g. in CI or
+    # any sandboxed/offline environment - and its fallback path still
+    # writes cam01..cam30 to the `cameras` table through its own DB
+    # session, outside of and concurrently with whatever transaction a
+    # test is using. Against the isolated-per-test SAVEPOINT setup in
+    # tests/conftest.py, that write can block on a lock the test already
+    # holds on the very same seeded rows - which looks exactly like
+    # `pytest` hanging/freezing for no visible reason. DISABLE_CATALOGUE_POLL
+    # (set by tests/conftest.py before any TestClient is created) skips
+    # starting this task entirely; it's unset (poll runs normally) for
+    # every real deployment, including docker-compose.
+    disable_catalogue_poll = os.environ.get("DISABLE_CATALOGUE_POLL", "false").lower() == "true"
 
-        poll_task = asyncio.create_task(
-            poller.poll_forever(callback=_db_only_sync)
-        )
-    else:
-        poll_task = asyncio.create_task(
-            poller.poll_forever(
-                callback=lambda cams: _sync_cameras(supervisor, cams, settings.MEDIAMTX_API)
+    poll_task = None
+    if not disable_catalogue_poll:
+        if disable_ingestion:
+            async def _db_only_sync(cams):
+                loop = asyncio.get_running_loop()
+                await loop.run_in_executor(None, upsert_cameras_to_db, cams)
+
+            poll_task = asyncio.create_task(
+                poller.poll_forever(callback=_db_only_sync)
             )
-        )
+        else:
+            poll_task = asyncio.create_task(
+                poller.poll_forever(
+                    callback=lambda cams: _sync_cameras(supervisor, cams, settings.MEDIAMTX_API)
+                )
+            )
 
     yield
 
-    poll_task.cancel()
-    try:
-        await poll_task
-    except asyncio.CancelledError:
-        pass
+    if poll_task is not None:
+        poll_task.cancel()
+        try:
+            await poll_task
+        except asyncio.CancelledError:
+            pass
     supervisor.stop_all()
 
 
