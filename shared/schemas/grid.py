@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import List, Optional
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class StreamProperties(BaseModel):
@@ -33,8 +33,7 @@ class CameraStreamResponse(BaseModel):
     hls_url: Optional[str] = None
     properties: Optional[StreamProperties] = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class CatalogueSyncItem(BaseModel):
