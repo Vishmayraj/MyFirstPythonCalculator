@@ -138,4 +138,5 @@ curl -I http://localhost:8889/cam01/whep
 MediaMTX config is at `infra/mediamtx.yml`. Key settings:
 - `protocols: [tcp]` — TCP-only RTSP (no UDP, matches our ingestion workers)
 - `api: yes` on port 9997 — used by supervisor to register streams dynamically
-- `hlsAlwaysRemux: yes` — HLS available even when no viewer is watching
+- `hlsAlwaysRemux: yes` — HLS available even when no viewer is watching
+- `hlsAllowOrigin` / `webrtcAllowOrigin` — CORS origin allowed to embed playback. The file's own defaults are `localhost:8000` for local dev, but `docker-compose.yml`'s `mediamtx` service overrides both via `MTX_HLSALLOWORIGIN`/`MTX_WEBRTCALLOWORIGIN` env vars driven off a single `MEDIAMTX_CORS_ORIGIN` (see `.env.example`) — **set this to your real deployed origin**, or HLS/WebRTC playback will fail with a CORS error in the browser console once this isn't running on `localhost:8000` anymore.

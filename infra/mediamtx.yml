@@ -16,7 +16,16 @@ webrtcAdditionalHosts: [127.0.0.1, localhost]
 hls: yes
 hlsAddress: :8888
 hlsSegmentDuration: 2s
-# CORS origins restricted to Sentinel UI (localhost:8000) to prevent unauthorized embedding
+# CORS origins restricted to the Sentinel UI, to prevent unauthorized
+# embedding. Hardcoding 'localhost:8000' here breaks HLS/WebRTC playback
+# with a CORS error the moment this is deployed to a real domain
+# (AuditReport1.md finding 11 / 3.2), so both values are overridden via the
+# MTX_HLSALLOWORIGIN / MTX_WEBRTCALLOWORIGIN environment variables that
+# infra/docker-compose.yml sets on the `mediamtx` service (both driven off
+# a single MEDIAMTX_CORS_ORIGIN env var - see .env.example). MediaMTX reads
+# env vars named MTX_<UPPERCASE_KEY> as overrides for any config.json/.yml
+# key, so these two literals are only the local-dev fallback for anyone
+# running `mediamtx mediamtx.yml` directly, outside docker-compose.
 hlsAllowOrigin: 'http://localhost:8000'
 webrtcAllowOrigin: 'http://localhost:8000'
 

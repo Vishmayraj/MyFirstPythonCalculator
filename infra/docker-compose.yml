@@ -72,6 +72,18 @@ services:
       - "8189:8189/udp"      # WebRTC UDP media data
       - "8189:8189/tcp"      # WebRTC TCP media data
       - "127.0.0.1:9997:9997"  # HTTP API
+    environment:
+      # mediamtx.yml hardcoded these to 'http://localhost:8000', which
+      # silently breaks HLS/WebRTC playback with a browser-console CORS
+      # error the moment this is deployed anywhere else (AuditReport1.md
+      # finding 11 / 3.2). MediaMTX reads MTX_<UPPERCASE_KEY> env vars as
+      # overrides for any mediamtx.yml key, so both are driven off one
+      # MEDIAMTX_CORS_ORIGIN var here - set it to the real deployed origin
+      # (e.g. https://your-real-domain.example) in .env; left unset, it
+      # falls back to the same localhost:8000 default mediamtx.yml has,
+      # so local dev is unaffected.
+      MTX_HLSALLOWORIGIN: "${MEDIAMTX_CORS_ORIGIN:-http://localhost:8000}"
+      MTX_WEBRTCALLOWORIGIN: "${MEDIAMTX_CORS_ORIGIN:-http://localhost:8000}"
     volumes:
       - ./mediamtx.yml:/mediamtx.yml:ro
     restart: unless-stopped
