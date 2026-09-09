@@ -88,8 +88,10 @@ class VMSAdapter(ABC):
     def system_id(self) -> str:
         """
         The UUID string of the federated_systems DB row for this adapter.
-        Must match the hardcoded UUIDs in federation_seed.sql so that events
-        written to federated_events FK correctly.
+        Must be stable across restarts (not regenerated per adapter
+        instance) so that events keep resolving to the same
+        federated_systems row — registration.py upserts that row by
+        this id every time the adapter connects.
         """
         ...
 
