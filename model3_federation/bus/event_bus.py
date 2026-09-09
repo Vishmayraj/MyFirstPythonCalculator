@@ -44,12 +44,16 @@ class FederationEventBus:
         # In-process fallback queue — used when Redis is unavailable
         self._fallback_queue: asyncio.Queue[FederatedEvent] = asyncio.Queue(maxsize=2000)
         self._redis_available: Optional[bool] = None  # None = not yet probed
+        # Reused publisher connection. A new one is only opened on first use
+        # or after a publish fails, so a burst of events doesn't open/ping/
+        # close a fresh connection per event.
+        self._publisher_client = None
 
     # ── Internal helpers ────────────────────────────────────────
 
-    async def _get_redis(self):
+    async def _new_redis_client(self):
         """
-        Return an aioredis client, or None if unavailable.
+        Return a freshly connected aioredis client, or None if unavailable.
         We import aioredis lazily so the app still boots if the library
         isn't installed (it's optional for bare local dev).
         """
@@ -61,6 +65,12 @@ class FederationEventBus:
         except Exception:
             return None
 
+    async def _get_publisher(self):
+        """Return the reused publisher client, (re)connecting only if needed."""
+        if self._publisher_client is None:
+            self._publisher_client = await self._new_redis_client()
+        return self._publisher_client
+
     # ── Public API ──────────────────────────────────────────────
 
     async def publish(self, event: FederatedEvent) -> None:
@@ -70,20 +80,21 @@ class FederationEventBus:
         """
         payload = event.model_dump_json()
 
-        # Try Redis first
-        client = await self._get_redis()
+        # Reuse the existing publisher connection instead of opening a new
+        # one per event — this is called once per camera detection, which
+        # can be several times a second during a burst.
+        client = await self._get_publisher()
         if client is not None:
             try:
                 await client.publish(_CHANNEL, payload)
-                await client.aclose()
                 return
             except Exception as exc:
-                logger.warning("Redis publish failed, using fallback queue: %s", exc)
-            finally:
+                logger.warning("Redis publish failed, dropping connection and using fallback queue: %s", exc)
                 try:
                     await client.aclose()
                 except Exception:
                     pass
+                self._publisher_client = None
 
         # Fallback: in-process queue (no Redis needed)
         logger.debug("Bus fallback: enqueuing event %s", event.id)
@@ -105,8 +116,10 @@ class FederationEventBus:
         Subscribe to the federation channel and call handler() per event.
         Runs indefinitely; designed to be started as an asyncio background task.
         Falls back to draining the in-process queue if Redis is unavailable.
+        Uses its own connection (not the shared publisher one) since a
+        pub/sub connection is put into a different mode by the client.
         """
-        client = await self._get_redis()
+        client = await self._new_redis_client()
 
         if client is not None:
             logger.info("Bus subscriber connected to Redis at %s", self._redis_url)
