@@ -30,6 +30,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket, WebSock
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from app.auth.dependencies import get_current_user, require_role
+from shared.db.models import User as UserModel
 from shared.db.session import get_db
 from model3_federation.bus.event_bus import FederationEventBus
 from model3_federation.correlation.engine import CorrelationEngine
@@ -136,11 +138,18 @@ async def start_federation_services(db_session_factory) -> None:
 # ── WebSocket endpoint ───────────────────────────────────────────────────────
 
 @router.websocket("/ws/federation")
-async def ws_federation(websocket: WebSocket):
+async def ws_federation(
+    websocket: WebSocket,
+    current_user: UserModel = Depends(get_current_user),
+):
     """
     WebSocket endpoint for the live federation dashboard.
     Pushes FederatedEvent, FederatedAlert, and CorrelationResult objects
     as JSON to every connected browser client.
+
+    Auth follows the same pattern as model2_analytics's /ws/detections:
+    get_current_user reads the access_token cookie/header, so only
+    logged-in users can open this socket.
     """
     await websocket.accept()
     _ws_clients.add(websocket)
@@ -180,7 +189,10 @@ async def ws_federation(websocket: WebSocket):
 # ── REST endpoints ───────────────────────────────────────────────────────────
 
 @router.get("/systems")
-def get_federated_systems(db: Session = Depends(get_db)) -> list[dict[str, Any]]:
+def get_federated_systems(
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user),
+) -> list[dict[str, Any]]:
     """List all 3 federated VMS systems with status, camera count, and last heartbeat."""
     rows = db.execute(text(
         """
@@ -215,6 +227,7 @@ def get_federated_systems(db: Session = Depends(get_db)) -> list[dict[str, Any]]
 def get_federated_cameras(
     system_id: Optional[str] = Query(None),
     db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user),
 ) -> list[dict[str, Any]]:
     """All federated cameras, optionally filtered by system_id."""
     q = """
@@ -256,6 +269,7 @@ def get_federated_events(
     plate: Optional[str] = Query(None),
     limit: int = Query(50, ge=1, le=200),
     db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user),
 ) -> list[dict[str, Any]]:
     """Recent federated events. Filterable by system_id and plate."""
     q = """
@@ -299,7 +313,10 @@ def get_federated_events(
 
 
 @router.get("/events/stats")
-def get_events_stats(db: Session = Depends(get_db)) -> list[dict[str, Any]]:
+def get_events_stats(
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user),
+) -> list[dict[str, Any]]:
     """Events per minute per system (live rate from in-memory counter)."""
     rows = db.execute(text(
         "SELECT id, name, vendor FROM federated_systems ORDER BY name"
@@ -320,6 +337,7 @@ def get_events_stats(db: Session = Depends(get_db)) -> list[dict[str, Any]]:
 def get_correlations(
     limit: int = Query(20, ge=1, le=100),
     db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user),
 ) -> list[dict[str, Any]]:
     """All cross-system correlations, most recent first."""
     rows = db.execute(text(
@@ -359,6 +377,7 @@ def get_correlations(
 def track_vehicle(
     plate: str = Query(..., description="Vehicle plate number to track across all VMS systems"),
     db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user),
 ) -> dict[str, Any]:
     """Full multi-system route for a specific plate number."""
     from model3_federation.correlation.engine import _normalize_plate
@@ -412,6 +431,7 @@ def track_vehicle(
 def get_federated_alerts(
     limit: int = Query(30, ge=1, le=100),
     db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user),
 ) -> list[dict[str, Any]]:
     """Federated watchlist alerts, most recent first."""
     rows = db.execute(text(
@@ -449,8 +469,9 @@ def get_federated_alerts(
 def acknowledge_alert(
     alert_id: str,
     db: Session = Depends(get_db),
+    current_user: UserModel = Depends(require_role("dept_admin", "operator")),
 ) -> dict[str, str]:
-    """Mark a federated alert as acknowledged."""
+    """Mark a federated alert as acknowledged. Same role gate as model2's write endpoints."""
     result = db.execute(text(
         """
         UPDATE federated_alerts
@@ -472,6 +493,7 @@ def acknowledge_alert(
 async def simulate_burst(
     system_id: str,
     db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user),
 ) -> dict[str, Any]:
     """
     Trigger a burst of 10 events from the specified VMS system.
