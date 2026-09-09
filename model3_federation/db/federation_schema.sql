@@ -5,6 +5,14 @@
 -- Run AFTER shared/db/schema.sql (which creates departments,
 -- users, and vehicles_watchlist that we FK into).
 -- Safe to re-run: all CREATE TABLE statements use IF NOT EXISTS.
+--
+-- No seed file follows this one. federated_systems and
+-- federated_cameras rows are written by each VMS adapter
+-- registering itself at startup (model3_federation/registration.py),
+-- using the adapter's own system_id/system_name/vendor/get_cameras()
+-- as the single source of truth. federated_events and
+-- correlation_results are populated only by events that actually
+-- flow through the bus — never pre-loaded.
 -- ============================================================
 
 -- Registered federated VMS systems (one row per department VMS)
