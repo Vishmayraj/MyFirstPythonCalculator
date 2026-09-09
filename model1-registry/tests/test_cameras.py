@@ -52,6 +52,21 @@ def rto_camera(admin_home_client, rto_dept_id):
 # ── Read ─────────────────────────────────────────────────────────
 
 
+def test_list_cameras_requires_auth(anon_client):
+    resp = anon_client.get("/api/v1/cameras")
+    assert resp.status_code == 401
+
+
+def test_get_camera_requires_auth(anon_client):
+    resp = anon_client.get(f"/api/v1/cameras/{uuid.uuid4()}")
+    assert resp.status_code == 401
+
+
+def test_get_camera_history_requires_auth(anon_client):
+    resp = anon_client.get(f"/api/v1/cameras/{uuid.uuid4()}/history")
+    assert resp.status_code == 401
+
+
 def test_list_cameras_default_active_only(admin_home_client):
     resp = admin_home_client.get("/api/v1/cameras")
     assert resp.status_code == 200

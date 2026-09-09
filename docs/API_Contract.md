@@ -1,6 +1,6 @@
 # API Contract
 
-Contract between `model1-registry` and `model2-analytics`, and between
+Contract between `model1-registry` and `model2_analytics`, and between
 either of them and the frontend. This is the thing that lets both models
 get built in parallel without stepping on each other — **if you change an
 endpoint's shape, update this file in the same PR.** Stale contract docs
@@ -34,7 +34,7 @@ government camera grid exposes its own read-only catalogue at
 `GET http://<host>/api/ingest` (returns each camera's id, location,
 codec, live status, and its RTSP/WHEP/HLS URLs) — that's the *source*
 Model 2's ingestion adapters poll, not part of our API surface. See
-`model2-analytics/README.md` for ingestion notes.
+`model2_analytics/README.md` for ingestion notes.
 
 ---
 
@@ -82,7 +82,7 @@ fields get added, don't let this drift from `shared/db/`.
 
 ## 2. Model 2 — Analytics & Watchlist endpoints
 
-Owner: `model2-analytics`. Data model reference: `Project_Context.md` §4.
+Owner: `model2_analytics`. Data model reference: `Project_Context.md` §4.
 
 | Method & path | Purpose | Status |
 |---|---|---|
@@ -95,6 +95,12 @@ Owner: `model2-analytics`. Data model reference: `Project_Context.md` §4.
 | `GET /api/v1/watchlist/vehicles/{id}` | Get specific watchlist record details | ✅ |
 | `PATCH /api/v1/watchlist/vehicles/{id}` | Update watchlist entry status (`active`/`resolved`) or incident description | ✅ |
 | `DELETE /api/v1/watchlist/vehicles/{id}` | Delete watchlist entry and cascade associated alert references | ✅ |
+| `GET /api/v1/watchlist/persons` | List & filter person watchlist entries (filters: `status`, `category`, `name`) | ✅ |
+| `POST /api/v1/watchlist/persons` | Register person target with 5-gate AI quality check & 512-d InceptionResnetV1 embedding in pgvector | ✅ |
+| `GET /api/v1/watchlist/persons/{id}` | Get specific person watchlist record details | ✅ |
+| `PATCH /api/v1/watchlist/persons/{id}` | Update person record details or toggle status (`active`/`resolved`) | ✅ |
+| `DELETE /api/v1/watchlist/persons/{id}` | Permanently delete person target and remove reference portrait from disk | ✅ |
+| `GET /api/v1/watchlist/persons/photos/{photo_filename}` | Authenticated serving of reference face portrait | ✅ |
 | `GET /api/v1/detections` | List detections, filterable by camera/plate/time range | 🚧 |
 | `GET /api/v1/vehicle-tracks/{plate_number}` | Full route reconstruction for a plate — **this is the Step 4 scored test** | 🚧 |
 | `GET /api/v1/alerts` | List alerts, filter by acknowledged/severity | 🚧 |
@@ -114,6 +120,53 @@ Owner: `model2-analytics`. Data model reference: `Project_Context.md` §4.
   "description": "White Hyundai Creta, missing since Sunday FIR #402/2026",
   "status": "active | resolved",
   "created_at": "datetime"
+}
+```
+
+### Person Watchlist Contract (`shared/schemas/persons_watchlist.py`)
+
+#### 1. Registration Request (`POST /api/v1/watchlist/persons`)
+Sent from Frontend UI as `multipart/form-data`:
+- `name` (string, required): Full name or alias (min 2, max 120 chars)
+- `category` (string, required): `'wanted'` | `'missing'` | `'suspect'`
+- `status` (string, optional): `'active'` | `'resolved'` (defaults to `'active'`)
+- `photo` (binary file, required): Reference portrait JPEG/PNG image (evaluated by 5 AI quality gates)
+
+#### 2. Database Storage (`persons_watchlist` table in PostgreSQL + pgvector)
+What is actually persisted in the database:
+| Column | Type | Description |
+|---|---|---|
+| `id` | `UUID PRIMARY KEY` | Auto-generated target identifier |
+| `name` | `TEXT` | Target name or alias |
+| `category` | `TEXT` | Checked: `'wanted'`, `'missing'`, `'suspect'` |
+| `face_embedding` | `VECTOR(512)` | **L2 unit-normalized 512-d vector** indexed via HNSW (`idx_persons_watchlist_embedding`) |
+| `photo_path` | `TEXT` | Disk path/URL: `/api/v1/watchlist/persons/photos/{uuid}.jpg` |
+| `status` | `TEXT` | Checked: `'active'`, `'resolved'` |
+| `created_at` | `TIMESTAMPTZ` | Record timestamp (`now()`) |
+
+#### 3. API Response JSON (`PersonWatchlistResponse`)
+Returned on `GET` and `POST` endpoints:
+```json
+{
+  "id": "uuid",
+  "name": "string",
+  "category": "wanted | missing | suspect",
+  "status": "active | resolved",
+  "photo_path": "/api/v1/watchlist/persons/photos/{uuid}.jpg | null",
+  "has_embedding": true,
+  "embedding_dim": 512,
+  "created_at": "datetime",
+  "quality_metrics": {
+    "face_detected": true,
+    "sharpness_score": 45.2,
+    "face_resolution": [274, 344],
+    "yaw_ratio": 2.1,
+    "roll_angle_deg": 1.4,
+    "brightness_mean": 128.5,
+    "is_frontal": true,
+    "quality_passed": true,
+    "rejection_reason": null
+  }
 }
 ```
 
@@ -167,7 +220,7 @@ streams (see §3 below), this is our own service, not exempt from it.
 Model 2's pipeline consumes the government camera grid directly per the
 resource doc — not through Model 1's API. Key constraints Model 2's
 ingestion code must follow (full detail in
-`model2-analytics/README.md`):
+`model2_analytics/README.md`):
 
 - RTSP forced over TCP, never trust `UDP`.
 - Read the camera list from the grid's own `/api/ingest`, not

@@ -286,15 +286,25 @@ def audit_page(
     if not user:
         return RedirectResponse(url="/login", status_code=302)
 
+    # AuditReport1.md #8: mirrors the API's role/department scoping in
+    # routers/audit.py::get_global_audit_log - a "viewer" (read-only, no
+    # department per Project_Context.md §3) shouldn't land on a page
+    # showing the full cross-department change history either. Redirect
+    # to the home page rather than rendering a table this role isn't
+    # meant to see, same idea as camera_new_form/camera_edit_form
+    # redirecting non-dept_admins away from forms they can't use.
+    if user.role not in ("dept_admin", "operator"):
+        return RedirectResponse(url="/", status_code=302)
+
+    from shared.db.models import Camera as CameraModel
     from shared.db.models import StatusHistory as StatusHistoryModel
 
-    rows = (
-        db.query(StatusHistoryModel)
-        .options(joinedload(StatusHistoryModel.camera))
-        .order_by(StatusHistoryModel.changed_at.desc())
-        .limit(200)
-        .all()
-    )
+    query = db.query(StatusHistoryModel).options(joinedload(StatusHistoryModel.camera))
+    if user.department_id:
+        query = query.filter(
+            StatusHistoryModel.camera.has(CameraModel.department_id == user.department_id)
+        )
+    rows = query.order_by(StatusHistoryModel.changed_at.desc()).limit(200).all()
 
     user_ids = {r.changed_by for r in rows if r.changed_by is not None}
     users_by_id = {}
@@ -418,6 +428,24 @@ def watchlist_page(
     )
 
 
+@router.get("/watchlist/persons", response_class=HTMLResponse)
+def persons_watchlist_page(
+    request: Request,
+    user: Optional[UserModel] = Depends(get_optional_current_user),
+):
+    """Person Watchlist & Facial Biometric Registry Page."""
+    if not user:
+        return RedirectResponse(url="/login", status_code=302)
+
+    return request.app.state.templates.TemplateResponse(
+        request=request,
+        name="persons_watchlist.html",
+        context={
+            "user": user,
+        },
+    )
+
+
 @router.get("/alerts", response_class=HTMLResponse)
 def alerts_page(
     request: Request,
@@ -428,6 +456,7 @@ def alerts_page(
         return RedirectResponse(url="/login", status_code=302)
     return request.app.state.templates.TemplateResponse(
         request=request,
+<<<<<<< HEAD
         name="alerts.html",
         context={"user": user},
     )
@@ -446,5 +475,31 @@ def anpr_page(
     return request.app.state.templates.TemplateResponse(
         request=request,
         name="anpr.html",
+        context={"user": user},
+=======
+        name="placeholder.html",
+        context={
+            "user": user,
+            "page_title": "Alerts",
+            "description": "Model 2 — not built yet, see docs/API_Contract.md §2",
+        },
+>>>>>>> origin/main
+    )
+
+
+# ── Model 3 Federation Dashboard ───────────────────────────────
+
+
+@router.get("/federation", response_class=HTMLResponse)
+def federation_page(
+    request: Request,
+    user: Optional[UserModel] = Depends(get_optional_current_user),
+):
+    """Model 3 — VMS Federation & Middleware unified dashboard."""
+    if not user:
+        return RedirectResponse(url="/login", status_code=302)
+    return request.app.state.templates.TemplateResponse(
+        request=request,
+        name="federation.html",
         context={"user": user},
     )

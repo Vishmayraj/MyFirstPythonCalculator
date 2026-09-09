@@ -257,10 +257,19 @@ function mapDashboard() {
 
                 const marker = L.marker([lat, lon], { icon });
 
+                const escapeHtml = (unsafe) => {
+                    return (unsafe || "").toString()
+                         .replace(/&/g, "&amp;")
+                         .replace(/</g, "&lt;")
+                         .replace(/>/g, "&gt;")
+                         .replace(/"/g, "&quot;")
+                         .replace(/'/g, "&#039;");
+                };
+
                 // Build popup
                 let popupHtml = `
                     <div class="popup-content">
-                        <div class="popup-title">${emoji} ${cam.name}</div>
+                        <div class="popup-title">${emoji} ${escapeHtml(cam.name)}</div>
                         <div class="popup-row">
                             <span class="popup-label">Department</span>
                             <span class="popup-value">${cam.department_name || '—'}</span>

@@ -1,6 +1,6 @@
 # shared/ — Shared Domain Foundation
 
-Code that both `model1-registry` and `model2-analytics` share. Model 1 and Model 2 run within the same FastAPI application context (see `Project_Context.md` §2), sharing database connections and schema models.
+Code that both `model1-registry` and `model2_analytics` share. Model 1 and Model 2 run within the same FastAPI application context (see `Project_Context.md` §2), sharing database connections and schema models.
 
 ## `db/`
 

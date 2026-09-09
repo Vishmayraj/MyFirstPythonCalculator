@@ -3,7 +3,7 @@ VMS adapter interface — base types and abstract base class.
 
 Every camera adapter implements BaseVMSAdapter.
 Every consumer of VMS output depends on FramePacket.
-Single definition here; do NOT duplicate in model2-analytics.
+Single definition here; do NOT duplicate in model2_analytics.
 """
 
 from __future__ import annotations

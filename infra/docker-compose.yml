@@ -9,9 +9,15 @@ services:
     image: sentinel-postgis-pgvector:16-3.4
     pull_policy: build
     environment:
-      POSTGRES_USER: sentinel
-      POSTGRES_PASSWORD: sentinel_dev
-      POSTGRES_DB: sentinel
+      # Overridable via .env/environment (AuditReport1.md finding 12 / 3.3)
+      # - defaults match what every other doc/script in this repo assumes,
+      # so nothing breaks for anyone who doesn't set these. `app`'s
+      # DATABASE_URL below is built from these same three vars, so
+      # overriding POSTGRES_PASSWORD here also flows through automatically
+      # - no need to separately edit DATABASE_URL to keep them in sync.
+      POSTGRES_USER: "${POSTGRES_USER:-sentinel}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:-sentinel_dev}"
+      POSTGRES_DB: "${POSTGRES_DB:-sentinel}"
     ports:
       - "5433:5432"
     volumes:
@@ -25,6 +31,8 @@ services:
       - ../shared/db/schema.sql:/docker-entrypoint-initdb.d/20-schema.sql:ro
       - ../shared/db/triggers.sql:/docker-entrypoint-initdb.d/30-triggers.sql:ro
       - ../shared/db/seed.sql:/docker-entrypoint-initdb.d/40-seed.sql:ro
+      - ../model3_federation/db/federation_schema.sql:/docker-entrypoint-initdb.d/50-federation-schema.sql:ro
+      - ../model3_federation/db/federation_seed.sql:/docker-entrypoint-initdb.d/60-federation-seed.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U sentinel -d sentinel"]
       interval: 5s
@@ -41,17 +49,60 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      redis:
+        condition: service_healthy
     ports:
       - "8000:8000"
     environment:
-      DATABASE_URL: "postgresql://sentinel:sentinel_dev@db:5432/sentinel"
+      # Was a bare literal with no override path at all (AuditReport1.md
+      # finding 12 / 3.3), unlike GRID_HOST/MEDIAMTX_API below which
+      # already used the `${VAR:-default}` pattern. Now built from the
+      # same POSTGRES_USER/PASSWORD/DB vars the `db` service uses above,
+      # so the two can't drift out of sync - or set DATABASE_URL directly
+      # to override the whole connection string at once (e.g. for an
+      # external/managed Postgres instead of the `db` service).
+      DATABASE_URL: "${DATABASE_URL:-postgresql://${POSTGRES_USER:-sentinel}:${POSTGRES_PASSWORD:-sentinel_dev}@db:5432/${POSTGRES_DB:-sentinel}}"
+      # No safe default exists for SECRET_KEY - it signs every login
+      # session's JWT, and the checked-in app/config.py default is public.
+      # Previously there was no way to override this without hand-editing
+      # this file; now `docker compose up` refuses to start until a real
+      # value is set (see .env.example). DEBUG must also be explicit here,
+      # since app/config.py only enforces SECRET_KEY when DEBUG=false.
+      SECRET_KEY: "${SECRET_KEY:?SECRET_KEY must be set - see .env.example}"
+      DEBUG: "${DEBUG:-false}"
       GRID_HOST: "${GRID_HOST:-cctv.corp8.cloud}"
       MEDIAMTX_API: "${MEDIAMTX_API:-mediamtx:9997}"
-      DISABLE_INGESTION: "${DISABLE_INGESTION:-false}"
+      DISABLE_INGESTION: "${DISABLE_INGESTION:-true}"
+      GRID_RTSP_USER: "${GRID_RTSP_USER:-}"
+      GRID_RTSP_PASS: "${GRID_RTSP_PASS:-}"
+      REDIS_URL: "${REDIS_URL:-redis://redis:6379}"
+    # NOTE: the image now runs as a non-root `appuser` (uid 1000, see
+    # infra/Dockerfile / AuditReport1.md finding 21). These bind mounts
+    # replace the chowned in-image directories with whatever ownership
+    # they have on the host, so on a Linux host where your own user isn't
+    # uid 1000, writes into a mounted path (e.g. the detection pipeline
+    # writing crops into model2_analytics/detection-image) can fail with
+    # a permission error. Not an issue on Docker Desktop (Windows/macOS),
+    # where this project is primarily developed/tested. If you hit this
+    # on Linux, either `chown -R 1000:1000 ../model2_analytics` on the
+    # host once, or add `user: "${UID}:${GID}"` here to match your host
+    # user instead.
     volumes:
       - ../model1-registry/app:/app/app
-      - ../model2-analytics:/model2-analytics
+      - ../model2_analytics:/app/model2_analytics
       - ../shared:/app/shared
+      - ../model3_federation:/app/model3_federation
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   mediamtx:
     image: bluenviron/mediamtx:latest
@@ -62,9 +113,45 @@ services:
       - "8189:8189/udp"      # WebRTC UDP media data
       - "8189:8189/tcp"      # WebRTC TCP media data
       - "127.0.0.1:9997:9997"  # HTTP API
+    environment:
+      # mediamtx.yml hardcoded these to 'http://localhost:8000', which
+      # silently breaks HLS/WebRTC playback with a browser-console CORS
+      # error the moment this is deployed anywhere else (AuditReport1.md
+      # finding 11 / 3.2). MediaMTX reads MTX_<UPPERCASE_KEY> env vars as
+      # overrides for any mediamtx.yml key, so both are driven off one
+      # MEDIAMTX_CORS_ORIGIN var here - set it to the real deployed origin
+      # (e.g. https://your-real-domain.example) in .env; left unset, it
+      # falls back to the same localhost:8000 default mediamtx.yml has,
+      # so local dev is unaffected.
+      MTX_HLSALLOWORIGIN: "${MEDIAMTX_CORS_ORIGIN:-http://localhost:8000}"
+      MTX_WEBRTCALLOWORIGIN: "${MEDIAMTX_CORS_ORIGIN:-http://localhost:8000}"
     volumes:
       - ./mediamtx.yml:/mediamtx.yml:ro
     restart: unless-stopped
 
+  # Reverse proxy / TLS termination (AuditReport1.md finding 2.1: docs
+  # claimed "TLS everywhere via Caddy/Nginx" but no such config existed).
+  # `app` itself stays plain HTTP on the private compose network; Caddy is
+  # the only thing exposed on 80/443. Set DOMAIN to a real, DNS-resolvable
+  # hostname to get automatic Let's Encrypt HTTPS; left unset it defaults
+  # to `localhost` with Caddy's local self-signed cert, so this works out
+  # of the box for local dev too.
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on:
+      - app
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      DOMAIN: "${DOMAIN:-localhost}"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
 volumes:
   sentinel_pgdata:
+  caddy_data:
+  caddy_config:

@@ -17,16 +17,19 @@ import os
 import threading
 import time
 from typing import Dict, List, Optional
+from urllib.parse import quote
 import uuid
 
 import cv2
 from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import StreamingResponse, JSONResponse
+from fastapi.responses import StreamingResponse, JSONResponse, Response
 import numpy as np
 from sqlalchemy.orm import Session
 
 from shared.db.models import Camera as CameraModel
+from shared.db.models import User as UserModel
 from shared.db.session import get_db
+from app.auth.dependencies import get_current_user
 from app.config import settings
 
 logger = logging.getLogger(__name__)
@@ -86,6 +89,18 @@ class CameraStreamReader:
                 )
                 self._thread.start()
 
+    def touch(self) -> None:
+        with self._lock:
+            self._last_access_time = time.time()
+            if not self._running:
+                self._running = True
+                self._thread = threading.Thread(
+                    target=self._capture_loop,
+                    name=f"stream-reader-{self.cam_id}",
+                    daemon=True,
+                )
+                self._thread.start()
+
     def remove_viewer(self) -> None:
         with self._lock:
             self._active_viewers = max(0, self._active_viewers - 1)
@@ -106,27 +121,31 @@ class CameraStreamReader:
 
         while self._running:
             with self._lock:
-                if self._active_viewers <= 0 and (time.time() - self._last_access_time > 8.0):
+                if self._active_viewers <= 0 and (time.time() - self._last_access_time > 4.0):
                     logger.info(f"[{self.cam_id}] Inactive timeout, closing stream.")
                     self._running = False
                     break
 
             if not cap.isOpened():
                 time.sleep(0.8)
+                os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp|fflags;nobuffer|max_delay;500000"
                 cap = cv2.VideoCapture(self.rtsp_url, cv2.CAP_FFMPEG)
                 continue
 
             ok, frame = cap.read()
             if not ok:
                 consecutive_failures += 1
-                if consecutive_failures > 5:
-                    logger.warning(f"[{self.cam_id}] Stream read failed, reconnecting...")
+                # Remote grid cameras (e.g. cam07-cam30) have GOP keyframe intervals up to 10-12s.
+                # Do NOT reconnect after 0.25s; allow up to 60 read attempts (~9 seconds) for keyframe.
+                if consecutive_failures > 60:
+                    logger.warning(f"[{self.cam_id}] Stream read failed for >9s, reconnecting...")
                     cap.release()
                     time.sleep(1.0)
+                    os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp|fflags;nobuffer|max_delay;500000"
                     cap = cv2.VideoCapture(self.rtsp_url, cv2.CAP_FFMPEG)
                     consecutive_failures = 0
                 else:
-                    time.sleep(0.05)
+                    time.sleep(0.12)
                 continue
 
             consecutive_failures = 0
@@ -154,10 +173,29 @@ _STREAM_READERS: Dict[str, CameraStreamReader] = {}
 _REGISTRY_LOCK = threading.Lock()
 
 
+def _build_authenticated_rtsp_url(stream_id: str) -> str:
+    """
+    Builds the internal RTSP connection URL with properly percent-encoded credentials (RFC 3986).
+    Protects against special characters (like '@' in email usernames) breaking the URI scheme.
+    """
+    if settings.GRID_RTSP_USER and settings.GRID_RTSP_PASS:
+        user_enc = quote(settings.GRID_RTSP_USER, safe="")
+        pass_enc = quote(settings.GRID_RTSP_PASS, safe="")
+        return f"rtsp://{user_enc}:{pass_enc}@{settings.GRID_RTSP_HOST}:{settings.GRID_RTSP_PORT}/stream/{stream_id}"
+    return f"rtsp://{settings.GRID_RTSP_HOST}:{settings.GRID_RTSP_PORT}/stream/{stream_id}"
+
+
 def get_or_create_stream_reader(cam_id: str, rtsp_url: str) -> CameraStreamReader:
     with _REGISTRY_LOCK:
         if cam_id not in _STREAM_READERS:
             _STREAM_READERS[cam_id] = CameraStreamReader(rtsp_url=rtsp_url, cam_id=cam_id)
+        else:
+            reader = _STREAM_READERS[cam_id]
+            if reader.rtsp_url != rtsp_url:
+                with reader._lock:
+                    reader.rtsp_url = rtsp_url
+                    reader._running = False
+                _STREAM_READERS[cam_id] = CameraStreamReader(rtsp_url=rtsp_url, cam_id=cam_id)
         return _STREAM_READERS[cam_id]
 
 
@@ -177,8 +215,43 @@ async def frame_generator(reader: CameraStreamReader):
         reader.remove_viewer()
 
 
+@router.get("/grid/{grid_id}/frame")
+async def get_camera_frame_by_grid_id(
+    grid_id: str,
+    current_user: UserModel = Depends(get_current_user),
+):
+    """
+    Returns the single latest JPEG frame for a camera.
+    Ultra-lightweight endpoint used by matrix cards to prevent browser socket exhaustion.
+    """
+    clean_id = grid_id.lower()
+    if clean_id.isdigit():
+        clean_id = f"cam{int(clean_id):02d}"
+    elif not clean_id.startswith("cam"):
+        clean_id = f"cam{clean_id}"
+
+    rtsp_url = _build_authenticated_rtsp_url(clean_id)
+
+    reader = get_or_create_stream_reader(cam_id=clean_id, rtsp_url=rtsp_url)
+    reader.touch()
+    jpeg = reader.get_latest_jpeg()
+
+    return Response(
+        content=jpeg,
+        media_type="image/jpeg",
+        headers={
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+            "Pragma": "no-cache",
+            "Expires": "0",
+        },
+    )
+
+
 @router.get("/grid/{grid_id}/live")
-async def stream_camera_by_grid_id(grid_id: str):
+async def stream_camera_by_grid_id(
+    grid_id: str,
+    current_user: UserModel = Depends(get_current_user),
+):
     """
     Streams live video frames directly for a government grid camera (e.g. cam01 through cam30).
     Decodes both H.264 and HEVC (H.265) server-side with zero browser codec dependencies.
@@ -189,7 +262,8 @@ async def stream_camera_by_grid_id(grid_id: str):
     elif not clean_id.startswith("cam"):
         clean_id = f"cam{clean_id}"
 
-    rtsp_url = f"rtsp://{settings.GRID_RTSP_HOST}:{settings.GRID_RTSP_PORT}/stream/{clean_id}"
+    rtsp_url = _build_authenticated_rtsp_url(clean_id)
+
     reader = get_or_create_stream_reader(cam_id=clean_id, rtsp_url=rtsp_url)
 
     return StreamingResponse(
@@ -204,23 +278,35 @@ async def stream_camera_by_grid_id(grid_id: str):
 
 
 @router.get("/{camera_id}/live")
-async def stream_camera_by_uuid(camera_id: uuid.UUID, db: Session = Depends(get_db)):
+async def stream_camera_by_uuid(
+    camera_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user),
+):
     """
     Streams live video frames for a database camera row.
     """
+    # Was reaching for shared.db.session._SessionLocal directly inside a
+    # manual `with` block - a "private," underscore-prefixed module
+    # attribute - instead of the Depends(get_db) pattern every other
+    # endpoint in this file (and the whole codebase) uses. No behavior
+    # change: get_db() raises the same RuntimeError if the engine hasn't
+    # been initialised yet, and FastAPI closes the session for us on the
+    # way out exactly like the old `with` block did (AuditReport1.md
+    # finding 22 / 4.4).
     camera = db.query(CameraModel).filter(CameraModel.id == camera_id).first()
     if not camera:
         raise HTTPException(status_code=404, detail="Camera not found")
-
     rtsp_url = camera.rtsp_url
+    grid_id = camera.source_grid_id or "cam01"
+
     if not rtsp_url:
-        grid_id = camera.source_grid_id or "cam01"
         if grid_id.isdigit():
             grid_id = f"cam{int(grid_id):02d}"
-        rtsp_url = f"rtsp://{settings.GRID_RTSP_HOST}:{settings.GRID_RTSP_PORT}/stream/{grid_id}"
+        rtsp_url = _build_authenticated_rtsp_url(grid_id)
 
     reader = get_or_create_stream_reader(
-        cam_id=str(camera.id),
+        cam_id=str(camera_id),
         rtsp_url=rtsp_url,
     )
 
@@ -239,25 +325,17 @@ async def stream_camera_by_uuid(camera_id: uuid.UUID, db: Session = Depends(get_
 
 
 @streams_router.get("/catalogue")
-async def get_stream_catalogue(request: Request, db: Session = Depends(get_db)):
+async def get_stream_catalogue(
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user),
+):
     """
-    Returns a dynamic JSON catalogue of all live camera stream endpoints.
-
-    Reads from the database first (cameras with source_grid_id set).
-    Falls back to the known grid pattern (cam01–cam30 on the public grid)
-    if the DB has no grid-synced cameras yet.
-
-    Each entry exposes:
-      - id            : source_grid_id (e.g. "cam04")
-      - name          : human-readable camera name
-      - hls_url       : HLS playlist URL (via CDN, works everywhere)
-      - mjpeg_url     : Server-side MJPEG proxy URL (always works, server decodes)
-      - rtsp_url      : Direct RTSP URL (LAN/RTSP-capable clients)
-      - codec         : stream codec if known
-      - is_live       : bool
+    Returns the live camera stream catalogue for the /live grid view.
+    Always returns sanitized, public URLs (passwords protected in backend config).
     """
-    # Build base URL so MJPEG proxy URLs are absolute
-    base_url = str(request.base_url).rstrip("/")
+    raw_base = str(request.base_url)
+    base_url = raw_base if raw_base.endswith("/") else f"{raw_base}/"
 
     cameras = (
         db.query(CameraModel)
@@ -284,20 +362,21 @@ async def get_stream_catalogue(request: Request, db: Session = Depends(get_db)):
                 continue
             seen_ids.add(grid_id)
 
+            public_rtsp = f"rtsp://{settings.GRID_RTSP_HOST}:{settings.GRID_RTSP_PORT}/stream/{grid_id}"
             entries.append(
                 {
                     "id": grid_id,
                     "db_id": str(cam.id),
                     "name": cam.name or f"Camera {grid_id[3:] if len(grid_id) > 3 else grid_id}",
                     "hls_url": f"https://{settings.GRID_CDN_HOST}/{grid_id}/index.m3u8",
-                    "mjpeg_url": f"{base_url}/api/v1/cameras/grid/{grid_id}/live",
-                    "rtsp_url": f"rtsp://{settings.GRID_RTSP_HOST}:{settings.GRID_RTSP_PORT}/stream/{grid_id}",
+                    "mjpeg_url": f"{base_url}api/v1/cameras/grid/{grid_id}/live",
+                    "frame_url": f"{base_url}api/v1/cameras/grid/{grid_id}/frame",
+                    "rtsp_url": public_rtsp,
                     "whep_url": f"http://{settings.GRID_RTSP_HOST}:{settings.GRID_WHEP_PORT}/stream/{grid_id}/whep",
                     "codec": cam.codec or "h264",
                     "is_live": cam.is_live if cam.is_live is not None else True,
-                    "location": cam.location_label or f"Gujarat Grid - {grid_id.upper()}",
+                    "location": cam.location_label or f"Ahmedabad — {grid_id}",
                     "department": cam.department.name if cam.department else "Home Department",
-                    "district": cam.district.name if cam.district else "Ahmedabad",
                 }
             )
         entries.sort(key=lambda x: int(x["id"].replace("cam", "")) if x["id"].replace("cam", "").isdigit() else 999)
@@ -308,25 +387,24 @@ async def get_stream_catalogue(request: Request, db: Session = Depends(get_db)):
     fallback = []
     for i in range(1, 31):
         grid_id = f"cam{i:02d}"
+        public_rtsp = f"rtsp://{settings.GRID_RTSP_HOST}:{settings.GRID_RTSP_PORT}/stream/{grid_id}"
         fallback.append(
             {
                 "id": grid_id,
                 "db_id": None,
                 "name": f"Camera {i:02d}",
                 "hls_url": f"https://{settings.GRID_CDN_HOST}/{grid_id}/index.m3u8",
-                "mjpeg_url": f"{base_url}/api/v1/cameras/grid/{grid_id}/live",
-                "rtsp_url": f"rtsp://{settings.GRID_RTSP_HOST}:{settings.GRID_RTSP_PORT}/stream/{grid_id}",
+                "mjpeg_url": f"{base_url}api/v1/cameras/grid/{grid_id}/live",
+                "frame_url": f"{base_url}api/v1/cameras/grid/{grid_id}/frame",
+                "rtsp_url": public_rtsp,
                 "whep_url": f"http://{settings.GRID_RTSP_HOST}:{settings.GRID_WHEP_PORT}/stream/{grid_id}/whep",
                 "codec": "h264",
                 "is_live": True,
-                "location": f"Gujarat Grid - {grid_id.upper()}",
+                "location": f"Ahmedabad — {grid_id}",
                 "department": "Home Department",
-                "district": "Ahmedabad",
             }
         )
 
     return JSONResponse(
         content={"cameras": fallback, "source": "grid_fallback", "total": len(fallback)}
     )
-
-

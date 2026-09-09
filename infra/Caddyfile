@@ -1,0 +1,21 @@
+# Sentinel reverse proxy — see AuditReport1.md finding 2.1.
+#
+# Project_Context.md Section 6 already claims "TLS everywhere via
+# Caddy/Nginx" as a built (not just planned) feature, but no Caddy/Nginx
+# config actually existed anywhere in infra/ until now.
+#
+# Caddy gives automatic HTTPS (via Let's Encrypt) for free once `DOMAIN`
+# is a real, publicly-resolvable hostname pointed at this host. For local
+# development DOMAIN defaults to `localhost`, where Caddy falls back to
+# its locally-trusted self-signed certificate instead of ACME - so
+# `docker compose up` keeps working out of the box with no domain/DNS
+# setup, and the same compose file becomes "real HTTPS" the moment a real
+# DOMAIN env var is set on a real server. See infra/README.md.
+
+{$DOMAIN:localhost} {
+	# The app itself has no TLS of its own — Caddy terminates HTTPS here
+	# and talks plain HTTP to `app` over the private compose network.
+	reverse_proxy app:8000
+
+	encode gzip
+}

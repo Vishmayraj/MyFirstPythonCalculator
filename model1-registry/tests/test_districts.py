@@ -1,6 +1,11 @@
 GUJARAT_DISTRICT_COUNT = 33
 
 
+def test_list_districts_requires_auth(anon_client):
+    resp = anon_client.get("/api/v1/districts")
+    assert resp.status_code == 401
+
+
 def test_districts_endpoint_returns_all_33(admin_home_client):
     """Regression test: shared/db/seed.sql previously only ran UPDATE
     statements against district *names* with nothing ever INSERTed, so this

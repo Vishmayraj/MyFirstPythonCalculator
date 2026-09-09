@@ -23,7 +23,7 @@ recall against, you want §2.
 
 30 cameras, pulled from `GET /api/ingest` on the government camera grid —
 the grid's own read-only catalogue (see `docs/API_Contract.md` §0 and
-`model2-analytics/README.md`), not something we synthesized. Each record
+`model2_analytics/README.md`), not something we synthesized. Each record
 gives an id/number, a free-text location label, live status, codec,
 resolution/fps/bitrate (when known), and RTSP/WHEP/HLS URLs.
 
@@ -48,7 +48,7 @@ Numbers below are pulled directly from the seeded table, not estimated:
 Of the 11 cameras with real stream metadata: **7 are H.264, 4 are HEVC**,
 resolution ranges from 1280×720 up to 2560×1440, frame rate from 12.5 to
 25 fps, bitrate from 671 to 4001 kbps. Mixed codec/resolution across the
-grid is expected and already called out in `model2-analytics/README.md`
+grid is expected and already called out in `model2_analytics/README.md`
 — don't assume a uniform stream shape when building against this.
 
 ### Data quality caveats & demo dataset enrichment
@@ -81,33 +81,38 @@ still reproduces the current inventory from scratch.
 
 ## 2. Model 2 evaluation dataset
 
-**Status: not yet decided.** Owner: TBD.
+**Status: the storage schema is now decided (see below) — the actual
+eval dataset (labeled footage) is still not decided.** Owner: TBD.
 
-### Model 2 storage — also deliberately not decided
+### Model 2 storage — now exists in the shared schema
 
-`shared/db/schema.sql` covers Model 1 and the shared foundation only:
-`departments`, `districts`, `users`, `cameras`, `status_history`. There
-is intentionally **no** `detections`, `vehicle_tracks`,
-`vehicles_watchlist`, `persons_watchlist`, `alerts`, or
-`ground_truth_annotations` table anywhere in the shared schema right
-now — an earlier pass had sketched all of these, and they've been
-removed on purpose, not lost.
+**Update:** this used to say the Model 2 tables were "intentionally...
+removed... not lost," pending a separate `schema_model2.sql` once
+pipeline choices were made. That's no longer accurate — `shared/db/
+schema.sql` and `shared/db/models.py` now both fully define
+`vehicles_watchlist`, `persons_watchlist`, `vehicle_tracks`,
+`detections`, and `alerts` in the *same* schema file as Model 1, not a
+separate one, with real indexes, `CHECK` constraints (e.g. watchlist
+`category`/`status` enums, alert `severity`), and `pgvector` `VECTOR(512)`
+embedding columns with HNSW indexes on `persons_watchlist.face_embedding`
+and `vehicle_tracks.appearance_embedding`. `infra/README.md`'s own
+description of `40-seed.sql` already says it populates "sample vehicle
+watchlists/alerts," consistent with this - so this file was the one
+piece of documentation still describing the old plan.
 
-Reasoning: that entire stack (embeddings, track stitching, ground-truth
-storage, watchlist shape, alert severity taxonomy) is AI/pipeline work
-owned end-to-end by whoever builds Model 2, and locking in a schema for
-it before that person has picked a detection/OCR/re-id approach means
-guessing at things like embedding dimensionality, whether tracks are a
-real table or a derived view, and how many watchlist types exist —
-exactly the kind of premature commitment that gets expensively
-unpicked later. Model 1 doesn't need any of it to stand alone.
+There is still **no** `ground_truth_annotations` table - that part of
+the original claim stands; only the watchlist/track/detection/alert
+tables have actually been built. Whoever owns the Model 2 audit next
+should treat `docs/API_Contract.md` §2 (detections, alerts,
+vehicle-tracks endpoints) against the real `shared/db/schema.sql`, not
+against this file's old "aspirational shape" framing.
 
-When Model 2 work starts, its schema belongs in its own migration file
-(e.g. `shared/db/schema_model2.sql`) once the actual pipeline choices
-are made, informed by whatever this section ends up saying about the
-eval dataset. Until then, treat `docs/API_Contract.md` §2 (detections,
-alerts, vehicle-tracks endpoints) as aspirational shape, not a contract
-against a real table.
+One thing this *doesn't* resolve: whether the eval-dataset question in
+§"What we need" below is now also decided just because the storage
+schema is. It isn't automatically - a schema existing doesn't mean
+someone has picked/labeled the actual eval data to populate it with.
+Whoever merged the schema change should confirm whether that's still
+open, separately from this storage-schema correction.
 
 ### What we need
 
@@ -142,7 +147,7 @@ sourcing job.
   real government feed at evaluation time.
 - The live government feed at Step 4 is the actual scored test — this
   dataset is for building/validating the pipeline beforehand, not a
-  substitute for handling live RTSP per `model2-analytics/README.md`.
+  substitute for handling live RTSP per `model2_analytics/README.md`.
 
 Fill this section in once a direction is picked — what was chosen, how
 many clips/plates, labeling method, where it lives (not committed to git

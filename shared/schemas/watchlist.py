@@ -12,7 +12,7 @@ import re
 import uuid
 from datetime import date, datetime
 from typing import Optional, Literal
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 # Regular expressions for Indian License Plates:
@@ -102,5 +102,4 @@ class VehicleWatchlistResponse(VehicleWatchlistBase):
     created_at: datetime
     department_name: Optional[str] = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)

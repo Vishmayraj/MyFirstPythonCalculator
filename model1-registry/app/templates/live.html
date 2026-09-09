@@ -215,12 +215,6 @@
       <button class="layout-btn" data-cols="5" onclick="setLayout(5)" title="5 Columns">5&#215;2</button>
     </div>
 
-    <div class="toolbar-section">
-      <span class="toolbar-label">Source</span>
-      <button class="tab-btn active" id="proto-direct" onclick="setProtocol('direct')" title="Direct RTSP/TCP Server Decode">Direct (RTSP)</button>
-      <button class="tab-btn" id="proto-hls" onclick="setProtocol('hls')" title="HLS via CDN">HLS</button>
-    </div>
-
     <div id="feed-status" class="status-pill loading">
       <span class="pulse"></span>&nbsp;Connecting...
     </div>
@@ -410,16 +404,19 @@ function renderCard(cam, container) {
     openModal(cam.id);
   };
 
-  // Wire RTSP copy chip
+  // Wire RTSP copy chip (clean URL, no credentials)
   card.querySelector('#chip-' + safeId).onclick = function() {
-    copyToClipboard(cam.rtsp_url || ('rtsp://103.250.160.189:8554/stream/' + cam.id));
-    notify('Copied RTSP URL for ' + cam.id);
+    var urlToCopy = cam.rtsp_url || ('rtsp://' + window.location.hostname + ':8554/stream/' + cam.id);
+    copyToClipboard(urlToCopy);
+    notify('Copied RTSP URL: ' + urlToCopy);
   };
 
   attachStream(cam);
 }
 
 // ── Stream Attachment ──────────────────────────────────────────────
+var streamPollTimers = {};
+
 function attachStream(cam) {
   if (currentProtocol === 'hls') {
     attachHls(cam);
@@ -428,7 +425,7 @@ function attachStream(cam) {
   }
 }
 
-// ── Direct RTSP-decoded stream ─────────────────────────────────────
+// ── Direct RTSP-decoded stream (Lightweight Snapshot Polling) ───────
 function attachDirect(cam) {
   const safeId = cam.id.replace(/[^A-Za-z0-9_-]/g, '_');
   var video = document.getElementById('vid-' + safeId);
@@ -441,21 +438,34 @@ function attachDirect(cam) {
   var pl = document.getElementById('pl-' + safeId);
   if (pl) pl.textContent = 'RTSP/TCP';
 
-  var mjpegUrl = cam.mjpeg_url || ('/api/v1/cameras/grid/' + cam.id + '/live');
-  img.src = mjpegUrl + '?t=' + Date.now();
-  showBuf(cam.id, 'Connecting RTSP...');
+  var frameUrl = cam.frame_url || ('/api/v1/cameras/grid/' + cam.id + '/frame');
+  showBuf(cam.id, 'Connecting...');
 
-  img.onload = function() {
-    showLive(cam.id);
-  };
-  img.onerror = function() {
-    showErr(cam.id, 'Retrying...');
-    schedRetry(cam, function(c) {
-      const sId = c.id.replace(/[^A-Za-z0-9_-]/g, '_');
-      var i = document.getElementById('img-' + sId);
-      if (i) { i.src = (c.mjpeg_url || ('/api/v1/cameras/grid/' + c.id + '/live')) + '?t=' + Date.now(); }
-    }, 2000, 30000);
-  };
+  // Clear existing timer if any
+  if (streamPollTimers[cam.id]) {
+    clearTimeout(streamPollTimers[cam.id]);
+    delete streamPollTimers[cam.id];
+  }
+
+  function pollFrame() {
+    var card = document.getElementById('card-' + safeId);
+    if (!card) return; // card was unmounted
+
+    var nextImg = new Image();
+    nextImg.onload = function() {
+      if (!document.getElementById('card-' + safeId)) return;
+      img.src = nextImg.src;
+      showLive(cam.id);
+      streamPollTimers[cam.id] = setTimeout(pollFrame, 400); // 2.5 fps smooth matrix update
+    };
+    nextImg.onerror = function() {
+      if (!document.getElementById('card-' + safeId)) return;
+      streamPollTimers[cam.id] = setTimeout(pollFrame, 1500);
+    };
+    nextImg.src = frameUrl + '?t=' + Date.now();
+  }
+
+  pollFrame();
 }
 
 // ── HLS Stream Attachment ──────────────────────────────────────────
@@ -572,6 +582,7 @@ function showErr(camId, msg) {
 // ── Cleanup ────────────────────────────────────────────────────────
 function destroyCam(camId) {
   const safeId = String(camId).replace(/[^A-Za-z0-9_-]/g, '_');
+  if (streamPollTimers[camId]) { clearTimeout(streamPollTimers[camId]); delete streamPollTimers[camId]; }
   if (retryTimers[camId]) { clearTimeout(retryTimers[camId]); delete retryTimers[camId]; }
   if (hlsInstances[camId]) {
     try { hlsInstances[camId].stopLoad(); hlsInstances[camId].detachMedia(); hlsInstances[camId].destroy(); } catch(e) {}
@@ -585,9 +596,29 @@ function destroyCam(camId) {
 }
 
 function destroyAll() {
+  Object.keys(streamPollTimers).forEach(function(id) {
+    clearTimeout(streamPollTimers[id]);
+    delete streamPollTimers[id];
+  });
+  document.querySelectorAll('img.cam-video').forEach(function(im) {
+    im.src = '';
+  });
+  document.querySelectorAll('video.cam-video').forEach(function(v) {
+    try { v.pause(); v.src = ''; v.load(); } catch(e) {}
+  });
   Object.keys(hlsInstances).forEach(destroyCam);
   Object.keys(retryTimers).forEach(function(id) { clearTimeout(retryTimers[id]); delete retryTimers[id]; });
 }
+
+window.addEventListener('beforeunload', destroyAll);
+window.addEventListener('pagehide', destroyAll);
+
+document.addEventListener('click', function(e) {
+  var a = e.target.closest('a');
+  if (a && a.href && !a.href.startsWith('javascript:') && !a.href.includes('#')) {
+    destroyAll();
+  }
+});
 
 // ── Layout ─────────────────────────────────────────────────────────
 function setLayout(cols, reload) {
@@ -608,8 +639,10 @@ function setLayout(cols, reload) {
 // ── Protocol Toggle ────────────────────────────────────────────────
 function setProtocol(proto) {
   currentProtocol = proto;
-  document.getElementById('proto-direct').classList.toggle('active', proto === 'direct');
-  document.getElementById('proto-hls').classList.toggle('active', proto === 'hls');
+  var d = document.getElementById('proto-direct');
+  var h = document.getElementById('proto-hls');
+  if (d) d.classList.toggle('active', proto === 'direct');
+  if (h) h.classList.toggle('active', proto === 'hls');
   if (catalogue.length > 0) {
     loadPage(currentPage);
   }
@@ -623,8 +656,15 @@ function openModal(camId) {
   }
   if (!cam) return;
 
+  var loc = cam.location || cam.department || 'Gujarat Grid';
   document.getElementById('modal-title').textContent = cam.name + ' (' + cam.id + ')';
-  document.getElementById('modal-sub').textContent = 'RTSP: ' + (cam.rtsp_url || ('rtsp://103.250.160.189:8554/stream/' + cam.id));
+  document.getElementById('modal-sub').textContent = 'Location: ' + loc;
+
+  // Pause background grid polling timers while modal is open
+  Object.keys(streamPollTimers).forEach(function(id) {
+    clearTimeout(streamPollTimers[id]);
+    delete streamPollTimers[id];
+  });
 
   var mv = document.getElementById('modal-video');
   var mi = document.getElementById('modal-img');
@@ -640,7 +680,7 @@ function openModal(camId) {
     modalHls.attachMedia(mv);
     modalHls.on(Hls.Events.MANIFEST_PARSED, function() { mv.play().catch(function(){}); });
   } else {
-    // Direct RTSP decode stream
+    // Direct RTSP decode stream at full framerate
     mv.style.display = 'none';
     mi.style.display = 'block';
     mi.src = (cam.mjpeg_url || ('/api/v1/cameras/grid/' + cam.id + '/live')) + '?t=' + Date.now();
@@ -655,6 +695,13 @@ function closeModal() {
   if (modalHls) { try { modalHls.stopLoad(); modalHls.detachMedia(); modalHls.destroy(); } catch(e){} modalHls = null; }
   mv.pause(); mv.src = ''; mv.load();
   mi.src = '';
+
+  // Resume grid polling for current page
+  var start = (currentPage - 1) * perPage;
+  var slice = catalogue.slice(start, start + perPage);
+  slice.forEach(function(c) {
+    attachDirect(c);
+  });
 }
 
 document.addEventListener('keydown', function(e) { if (e.key === 'Escape') closeModal(); });

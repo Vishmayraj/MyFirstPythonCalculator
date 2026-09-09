@@ -1,0 +1,4 @@
+# Model 3 Federation — Python dependencies
+# Separate from model2_analytics/requirements.txt; only federation needs these.
+redis>=5.0.0,<6.0.0        # Redis pub/sub event bus
+aioredis>=2.0.0,<3.0.0    # async Redis client (used by event_bus.py)

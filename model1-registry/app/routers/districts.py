@@ -5,15 +5,22 @@ from sqlalchemy.orm import Session
 
 from shared.db.models import Camera as CameraModel
 from shared.db.models import District as DistrictModel
+from shared.db.models import User as UserModel
 from shared.db.session import get_db
 
+from app.auth.dependencies import get_current_user
+from shared.db.models import User as UserModel
 from shared.schemas.district import District as DistrictSchema
+from app.auth.dependencies import get_current_user
 
 router = APIRouter(prefix="/api/v1/districts", tags=["districts"])
 
 
 @router.get("", response_model=list[DistrictSchema])
-def list_districts(db: Session = Depends(get_db)):
+def list_districts(
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user),
+):
     """List all 33 Gujarat districts with camera count and PostGIS MultiPolygon boundary GeoJSON."""
     rows = (
         db.query(

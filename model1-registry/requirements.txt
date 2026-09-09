@@ -1,14 +1,36 @@
-fastapi
-uvicorn[standard]
-sqlalchemy>=2.0
-geoalchemy2
-psycopg2-binary
-pydantic-settings
-jinja2
-python-multipart
-shapely
-passlib[bcrypt]
-python-jose[cryptography]
-opencv-python-headless
-requests
-ultralytics
+fastapi==0.141.1
+uvicorn[standard]==0.52.4
+sqlalchemy==2.0.52
+geoalchemy2==0.20.0
+psycopg2-binary==2.9.12
+pydantic-settings==2.15.0
+jinja2==3.1.6
+python-multipart==0.0.32
+shapely==2.1.2
+passlib[bcrypt]==1.7.4
+python-jose[cryptography]==3.5.0
+# numpy is a transitive dependency here (shapely, opencv-python-headless
+# below) with no explicit pin of its own, which used to mean a fresh
+# install picked whatever the latest numpy was at install time -- numpy
+# 2.5.3 as of this fix. opencv-python-headless==4.9.0.80's wheel predates
+# numpy 2.0 and is compiled against its pre-2.0 internal layout, so numpy
+# 2.x breaks it outright at import time ("ImportError: numpy.core.
+# multiarray failed to import" / "AttributeError: _ARRAY_API not found"
+# -- reproduced locally with a clean venv + this file's exact pins, and
+# is exactly what broke the model1-registry CI job). Pinned to the same
+# numpy version model2_analytics/requirements.txt already uses (1.26.4),
+# both because it's known-compatible with opencv-python-headless
+# 4.9.0.80 and so a combined install (see the opencv-python-headless
+# comment below) can't land on two different numpy resolutions either.
+numpy==1.26.4
+# Pinned to the exact same version as model2_analytics/requirements.txt
+# (4.9.0.80), not the version this was previously pinned to
+# (4.13.0.92). Both requirements.txt files install into the same
+# environment (see infra/Dockerfile), so two different exact pins of
+# the same package makes that combined install fail outright with a
+# modern pip resolver (verified locally, together with the sqlalchemy
+# conflict this file used to have with model2_analytics/requirements.txt).
+# model1's only cv2 usage (app/routers/streams.py: VideoCapture,
+# imencode, putText, resize) is all long-stable API, unaffected by the
+# downgrade. See AuditReport2.md finding 7.
+opencv-python-headless==4.9.0.80

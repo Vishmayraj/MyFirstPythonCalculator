@@ -178,8 +178,7 @@ vehicle-movement records" is a query, not a separate feature.
 
 - `vehicles_watchlist`: id, plate_number (normalized), category
   (stolen/wanted/blacklisted), reported_date, department, description, status
-- `persons_watchlist` (bonus scope, likely cut): id, name, category
-  (wanted/missing/suspect), face_embedding, status
+- `persons_watchlist`: id, name, category (wanted/missing/suspect), face_embedding (VECTOR(512)), photo_path, status, created_at (with 5-gate AI quality pipeline and HNSW cosine index)
 - `detections`: id, camera_id, timestamp, detected_plate, confidence,
   cropped_image_path, vehicle_track_id (nullable, groups detections of
   the same physical vehicle across cameras)

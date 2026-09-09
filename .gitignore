@@ -1,42 +1,69 @@
+# Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
 *$py.class
+
+# Environment & Secrets (NEVER COMMIT)
 .env
+.env.*
+!.env.example
+*.pem
+*.key
+*.cert
+*.crt
+
+# Virtual Environments
 .venv
 env/
 venv/
 ENV/
+
+# IDE / Editor configs
 .idea/
 .vscode/
-*.sqlite3
 
-# Crops and runtime media (stored in model2-analytics)
-model2-analytics/detection-image/*
-!model2-analytics/detection-image/.gitkeep
-model2-analytics/uploads/*
-!model2-analytics/uploads/.gitkeep
+# Local databases & dumps
+*.sqlite3
+*.dump
+
+# Test & coverage artifacts
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Logs
+*.log
+
+# OS generated files
+.DS_Store
+Thumbs.db
+ehthumbs.db
+
+# Crops and runtime media (stored in model2_analytics)
+model2_analytics/detection-image/*
+!model2_analytics/detection-image/.gitkeep
+model2_analytics/uploads/*
+!model2_analytics/uploads/.gitkeep
 
 # ── Model 2 — AI pipeline heavy/generated artifacts (03-Sep-2026) ──
 weights/
-model2-analytics/pipeline/dataset/
-model2-analytics/pipeline/*.pt
-model2-analytics/pipeline/*.cache
-model2-analytics/pipeline/dataset.yaml
+model2_analytics/pipeline/dataset/
+model2_analytics/pipeline/**/*.pt
+model2_analytics/pipeline/*.cache
+model2_analytics/pipeline/dataset.yaml
 demo_results/
 
-# -- ANPR dev artifacts & one-off scripts (not for repo) --
+# ── ANPR dev artifacts & one-off scripts (not for repo) ──
 # Heavy datasets / models / training outputs
 anpr_yolo_dataset/
 anpr_indian_test_results/
 runs/
-Test Input/
-model2-analytics/ANPR bhidio/
-model2-analytics/pipeline/plate/indian_models/
-model2-analytics/pipeline/plate/license_plate_detector.pt
+model2_analytics/ANPR bhidio/
+model2_analytics/pipeline/plate/indian_models/
+model2_analytics/pipeline/plate/license_plate_detector.pt
 yolov8n.pt
 
 # Logs & debug dumps
-*.log
 *_out.txt
 found_plate_*.jpg
 plate_debug_*.jpg
@@ -65,7 +92,7 @@ dump_results.py
 ws_check.py
 ws_check2.py
 implementation_plan.md
-model2-analytics/pipeline/analyze_live.py
-model2-analytics/pipeline/check_cuda.py
-model2-analytics/pipeline/check_dataset.py
-model2-analytics/pipeline/verify_live.py
+model2_analytics/pipeline/analyze_live.py
+model2_analytics/pipeline/check_cuda.py
+model2_analytics/pipeline/check_dataset.py
+model2_analytics/pipeline/verify_live.py

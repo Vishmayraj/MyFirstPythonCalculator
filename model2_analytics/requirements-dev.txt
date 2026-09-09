@@ -1,0 +1,11 @@
+# Test-only dependencies for model2_analytics/tests/.
+#
+# tests/conftest.py re-exports model1-registry/tests/conftest.py's
+# fixtures (same app, same DB -- see that file's docstring), so running
+# these tests also needs model1-registry's own runtime dependencies
+# installed (fastapi, sqlalchemy, geoalchemy2, psycopg2-binary, etc.)
+# in addition to this component's own requirements.txt.
+-r requirements.txt
+-r ../model1-registry/requirements.txt
+pytest
+httpx

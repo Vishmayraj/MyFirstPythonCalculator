@@ -21,7 +21,8 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI, HTTPException
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -31,8 +32,11 @@ local_repo_root = current_dir.parent.parent
 if (local_repo_root / "shared").exists() and str(local_repo_root) not in sys.path:
     sys.path.insert(0, str(local_repo_root))
 
+from app.auth.dependencies import get_current_user  # noqa: E402
 from app.config import settings  # noqa: E402
 from app.routers import audit, auth, cameras, departments, districts, gap_analysis, pages, streams  # noqa: E402
+from model3_federation.api.router import router as federation_router, start_federation_services  # noqa: E402
+from shared.db.models import User as UserModel  # noqa: E402
 from model2_analytics.app.ingestion.supervisor import IngestionSupervisor  # noqa: E402
 from model2_analytics.app.ingestion.catalogue import (  # noqa: E402
     CataloguePoller,
@@ -78,31 +82,80 @@ async def lifespan(app: FastAPI):
     poller = CataloguePoller(grid_host=settings.GRID_HOST)
     app.state.poller = poller
 
-    disable_ingestion = os.environ.get("DISABLE_INGESTION", "false").lower() == "true"
+    disable_ingestion = settings.DISABLE_INGESTION
 
-    if disable_ingestion:
-        async def _db_only_sync(cams):
-            loop = asyncio.get_running_loop()
-            await loop.run_in_executor(None, upsert_cameras_to_db, cams)
+    # DISABLE_INGESTION only turns off RTSP/MediaMTX registration - the
+    # catalogue poll itself still runs (and still writes to the DB via
+    # _db_only_sync below) so the registry stays in sync even with
+    # streaming off. That's fine in normal operation, but it's wrong
+    # during automated tests: CataloguePoller.fetch() makes a real HTTPS
+    # call to the live grid host on every app startup, retries with
+    # exponential backoff (2s -> 30s) whenever that call fails or times
+    # out - which it always does with no network access, e.g. in CI or
+    # any sandboxed/offline environment - and its fallback path still
+    # writes cam01..cam30 to the `cameras` table through its own DB
+    # session, outside of and concurrently with whatever transaction a
+    # test is using. Against the isolated-per-test SAVEPOINT setup in
+    # tests/conftest.py, that write can block on a lock the test already
+    # holds on the very same seeded rows - which looks exactly like
+    # `pytest` hanging/freezing for no visible reason. DISABLE_CATALOGUE_POLL
+    # (set by tests/conftest.py before any TestClient is created) skips
+    # starting this task entirely; it's unset (poll runs normally) for
+    # every real deployment, including docker-compose.
+    disable_catalogue_poll = os.environ.get("DISABLE_CATALOGUE_POLL", "false").lower() == "true"
 
-        poll_task = asyncio.create_task(
-            poller.poll_forever(callback=_db_only_sync)
-        )
-    else:
-        poll_task = asyncio.create_task(
-            poller.poll_forever(
-                callback=lambda cams: _sync_cameras(supervisor, cams, settings.MEDIAMTX_API)
+    poll_task = None
+    if not disable_catalogue_poll:
+        if disable_ingestion:
+            async def _db_only_sync(cams):
+                loop = asyncio.get_running_loop()
+                await loop.run_in_executor(None, upsert_cameras_to_db, cams)
+
+            poll_task = asyncio.create_task(
+                poller.poll_forever(callback=_db_only_sync)
             )
-        )
+        else:
+            poll_task = asyncio.create_task(
+                poller.poll_forever(
+                    callback=lambda cams: _sync_cameras(supervisor, cams, settings.MEDIAMTX_API)
+                )
+            )
+
+    # ── Model 3 Federation Services ─────────────────────────
+    # Pass the DB session factory and REDIS_URL so the federation bus
+    # and correlation engine can connect without importing from main.py.
+    import sys as _sys
+    import types as _types
+    # Inject REDIS_URL into a tiny shim module so router.py can import it
+    # without a circular dependency on app.config.
+    _shim = _types.ModuleType("model1_config")
+    _shim.REDIS_URL = settings.REDIS_URL
+    _sys.modules["model1_config"] = _shim
+
+    from shared.db.session import _SessionLocal as _sl
+    _fed_task = asyncio.create_task(
+        start_federation_services(db_session_factory=_sl),
+        name="federation-startup",
+    )
+    app.state.federation_task = _fed_task
 
     yield
 
-    poll_task.cancel()
-    try:
-        await poll_task
-    except asyncio.CancelledError:
-        pass
+    if poll_task is not None:
+        poll_task.cancel()
+        try:
+            await poll_task
+        except asyncio.CancelledError:
+            pass
     supervisor.stop_all()
+    # Cancel federation tasks
+    fed_task = getattr(app.state, "federation_task", None)
+    if fed_task is not None:
+        fed_task.cancel()
+        try:
+            await fed_task
+        except asyncio.CancelledError:
+            pass
 
 
 app = FastAPI(
@@ -118,12 +171,36 @@ BASE_DIR = Path(__file__).resolve().parent
 app.state.templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 
-# Mount model-2 detection-image directory
-DETECTION_IMG_DIR = Path("/model2-analytics/detection-image")
+# Model-2 detection-image directory (cropped vehicle/plate images from the
+# detection pipeline). NOT a plain StaticFiles mount (AuditReport1.md
+# finding 1.5) — a FastAPI Depends() can't be attached directly to a
+# StaticFiles mount, so this wraps the same directory in an explicit route
+# that requires a logged-in user and rejects path traversal before ever
+# touching the filesystem, instead of serving every file to anyone who can
+# guess a filename.
+DETECTION_IMG_DIR = Path("/app/model2_analytics/detection-image")
 if not DETECTION_IMG_DIR.exists():
-    DETECTION_IMG_DIR = Path(__file__).resolve().parents[2] / "model2-analytics" / "detection-image"
+    DETECTION_IMG_DIR = Path(__file__).resolve().parents[2] / "model2_analytics" / "detection-image"
 DETECTION_IMG_DIR.mkdir(parents=True, exist_ok=True)
-app.mount("/detection-image", StaticFiles(directory=str(DETECTION_IMG_DIR)), name="detection-image")
+_DETECTION_IMG_DIR_RESOLVED = DETECTION_IMG_DIR.resolve()
+
+
+@app.get("/detection-image/{file_path:path}", name="detection-image")
+async def get_detection_image(
+    file_path: str,
+    current_user: UserModel = Depends(get_current_user),
+):
+    """Serve a detection-pipeline crop image, but only to a logged-in user."""
+    requested = (_DETECTION_IMG_DIR_RESOLVED / file_path).resolve()
+    try:
+        requested.relative_to(_DETECTION_IMG_DIR_RESOLVED)
+    except ValueError:
+        # Path escapes DETECTION_IMG_DIR (e.g. "../../etc/passwd") — treat
+        # exactly like "not found" rather than confirming it exists elsewhere.
+        raise HTTPException(status_code=404, detail="Not found")
+    if not requested.is_file():
+        raise HTTPException(status_code=404, detail="Not found")
+    return FileResponse(str(requested))
 
 # ── Model 1 Routers ──────────────────────────────────────────────
 
@@ -136,11 +213,46 @@ app.include_router(departments.router)
 app.include_router(districts.router)
 app.include_router(gap_analysis.router)
 app.include_router(pages.router)
+app.include_router(federation_router)
 
 # ── Model 2 Routers (auto-discovery) ─────────────────────────────
+#
+# This dynamically imports every *.py file in model2_analytics/app/routers/
+# by filesystem path (importlib.util.spec_from_file_location) rather than
+# a normal `from model2_analytics.app.routers import X` import, and mounts
+# whatever has a module-level `router` attribute. Flagged in
+# AuditReport1.md finding 17 as "fragile, worth documenting" rather than
+# a bug to fix outright - it works, but it's a non-obvious pattern with
+# real footguns for whoever touches it next:
+#
+#   * A syntax/import error in one Model-2 router file is swallowed (see
+#     the `except Exception` below) and only shows up as a printed
+#     "[model2] ERROR" line at startup - it does NOT fail the app boot,
+#     so a broken router silently just isn't there instead of crashing
+#     loudly. Check the startup logs if a Model-2 endpoint 404s
+#     unexpectedly.
+#   * Filenames starting with `_` are skipped on purpose (so e.g. a
+#     `_shared_helpers.py` living in this directory isn't mistaken for a
+#     router module) - this is a naming convention, not enforced by
+#     anything else in the codebase.
+#   * The two path candidates below exist because this file has to work
+#     both inside the Docker image (where Dockerfile COPYs model2_analytics/
+#     to /app/model2_analytics/) and from a local/bare `uvicorn` run (where
+#     it's a sibling directory of model1-registry/) - if you ever change
+#     that COPY path in infra/Dockerfile, update the matching candidate
+#     here too, or Model 2 endpoints will silently disappear in that
+#     environment.
+#   * Why not a normal package import, now that there's only one
+#     `model2_analytics/` package (AuditReport2.md finding 5 removed the
+#     old hyphenated-real / underscored-shim duplicate-package split -
+#     see model2_analytics/app/ingestion/__init__.py)? Because the
+#     reasons above (syntax errors shouldn't crash app boot, filename-
+#     based opt-out) are still true independent of that fix - this
+#     stays a deliberate design choice per AuditReport1.md finding 17,
+#     not a workaround for the duplication finding 5 has now closed.
 _M2_ROUTERS_DIR_CANDIDATES = [
-    Path("/model2-analytics/app/routers"),                              # Docker
-    local_repo_root / "model2-analytics" / "app" / "routers",          # Local dev
+    Path("/app/model2_analytics/app/routers"),                          # Docker
+    local_repo_root / "model2_analytics" / "app" / "routers",          # Local dev
 ]
 _m2_routers_dir = next((p for p in _M2_ROUTERS_DIR_CANDIDATES if p.is_dir()), None)
 

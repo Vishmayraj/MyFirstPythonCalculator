@@ -1,0 +1,621 @@
+{% extends "base.html" %}
+
+{% block title %}Sentinel — Person Watchlist & Facial Biometric Registry{% endblock %}
+
+{% block content %}
+<div class="page-container" style="max-width: 1480px; margin: 0 auto; padding: 2rem 1.5rem;" x-data="personsWatchlistPage()" x-init="init()">
+    <!-- Header -->
+    <div class="page-header" style="margin-bottom: 2rem; display: flex; align-items: flex-start; justify-content: space-between; flex-wrap: wrap; gap: 1rem;">
+        <div>
+            <div style="display: flex; align-items: center; gap: 0.65rem;">
+                <h1 class="page-title" style="font-size: 1.75rem; font-weight: 800; color: var(--text-primary); letter-spacing: -0.02em;">
+                    Person Watchlist
+                </h1>
+                <span class="badge" style="background: rgba(99, 102, 241, 0.15); color: var(--accent-light); border: 1px solid rgba(99, 102, 241, 0.3); font-size: 0.75rem; font-weight: 700;">
+                    512-D PGVECTOR HNSW
+                </span>
+            </div>
+            <p style="color: var(--text-secondary); font-size: 0.95rem; margin-top: 0.35rem;">
+                Facial biometric registry with real-time AI quality gatekeeper (boundary completeness, sharpness, and 3D pose) and 512-dimensional InceptionResnetV1 embeddings for 1:N surveillance identification.
+            </p>
+        </div>
+        <button class="btn btn--primary" @click="openAddModal()" id="btn-add-person" style="display: inline-flex; align-items: center; gap: 0.5rem; padding: 0.65rem 1.25rem; font-weight: 600;">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"></path>
+                <circle cx="9" cy="7" r="4"></circle>
+                <line x1="19" y1="8" x2="19" y2="14"></line>
+                <line x1="22" y1="11" x2="16" y2="11"></line>
+            </svg>
+            Add Person Target
+        </button>
+    </div>
+
+    <!-- Stat Metric Cards -->
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 1.25rem; margin-bottom: 2rem;">
+        <div class="card" style="padding: 1.35rem; background: rgba(17, 24, 39, 0.7); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: var(--radius-lg);">
+            <div style="font-size: 0.78rem; color: var(--text-muted); text-transform: uppercase; font-weight: 600; letter-spacing: 0.05em;">Total Active Targets</div>
+            <div style="font-size: 1.85rem; font-weight: 800; color: var(--text-primary); margin-top: 0.4rem;" x-text="stats.active">0</div>
+        </div>
+
+        <div class="card" style="padding: 1.35rem; background: rgba(239, 68, 68, 0.06); border: 1px solid rgba(239, 68, 68, 0.22); border-radius: var(--radius-lg);">
+            <div style="font-size: 0.78rem; color: #f87171; text-transform: uppercase; font-weight: 600; letter-spacing: 0.05em;">Wanted Suspects</div>
+            <div style="font-size: 1.85rem; font-weight: 800; color: #ef4444; margin-top: 0.4rem;" x-text="stats.wanted">0</div>
+        </div>
+
+        <div class="card" style="padding: 1.35rem; background: rgba(245, 158, 11, 0.06); border: 1px solid rgba(245, 158, 11, 0.22); border-radius: var(--radius-lg);">
+            <div style="font-size: 0.78rem; color: #fbbf24; text-transform: uppercase; font-weight: 600; letter-spacing: 0.05em;">Missing Persons</div>
+            <div style="font-size: 1.85rem; font-weight: 800; color: #f59e0b; margin-top: 0.4rem;" x-text="stats.missing">0</div>
+        </div>
+
+        <div class="card" style="padding: 1.35rem; background: rgba(168, 85, 247, 0.06); border: 1px solid rgba(168, 85, 247, 0.22); border-radius: var(--radius-lg);">
+            <div style="font-size: 0.78rem; color: #c084fc; text-transform: uppercase; font-weight: 600; letter-spacing: 0.05em;">Under Surveillance</div>
+            <div style="font-size: 1.85rem; font-weight: 800; color: #a855f7; margin-top: 0.4rem;" x-text="stats.suspect">0</div>
+        </div>
+
+        <div class="card" style="padding: 1.35rem; background: rgba(34, 197, 94, 0.06); border: 1px solid rgba(34, 197, 94, 0.22); border-radius: var(--radius-lg);">
+            <div style="font-size: 0.78rem; color: #4ade80; text-transform: uppercase; font-weight: 600; letter-spacing: 0.05em;">Resolved Cases</div>
+            <div style="font-size: 1.85rem; font-weight: 800; color: #22c55e; margin-top: 0.4rem;" x-text="stats.resolved">0</div>
+        </div>
+    </div>
+
+    <!-- Filters & Search Toolbar -->
+    <div class="card" style="padding: 1.25rem 1.5rem; margin-bottom: 1.75rem; background: rgba(17, 24, 39, 0.7); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: var(--radius-lg);">
+        <div style="display: flex; flex-wrap: wrap; gap: 1rem; align-items: center;">
+            <div style="flex: 1; min-width: 280px; position: relative;">
+                <input type="text" class="form-input" placeholder="Search person name or alias..."
+                       x-model="searchQuery" @input.debounce.300ms="loadWatchlist()" style="width: 100%; padding-left: 1rem;">
+            </div>
+
+            <div style="min-width: 170px;">
+                <select class="form-select" x-model="selectedCategory" @change="loadWatchlist()" style="width: 100%;">
+                    <option value="">All Categories</option>
+                    <option value="wanted">Wanted</option>
+                    <option value="missing">Missing</option>
+                    <option value="suspect">Suspect</option>
+                </select>
+            </div>
+
+            <div style="min-width: 160px;">
+                <select class="form-select" x-model="selectedStatus" @change="loadWatchlist()" style="width: 100%;">
+                    <option value="">All Statuses</option>
+                    <option value="active">Active</option>
+                    <option value="resolved">Resolved</option>
+                </select>
+            </div>
+
+            <button class="btn btn--secondary" @click="resetFilters()" style="padding: 0.6rem 1rem; font-weight: 500;">
+                Reset Filters
+            </button>
+        </div>
+    </div>
+
+    <!-- Watchlist Table Card -->
+    <div class="card" style="padding: 0; overflow: hidden; border: 1px solid rgba(255, 255, 255, 0.08); border-radius: var(--radius-lg); background: rgba(17, 24, 39, 0.75);">
+        <div class="table-wrapper" style="overflow-x: auto;">
+            <table class="table" id="persons-table" style="width: 100%; border-collapse: collapse;">
+                <thead>
+                    <tr style="border-bottom: 1px solid rgba(255, 255, 255, 0.08); background: rgba(15, 23, 42, 0.6);">
+                        <th style="padding: 1.1rem 1.5rem; font-size: 0.8rem; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; text-align: left;">Portrait</th>
+                        <th style="padding: 1.1rem 1.5rem; font-size: 0.8rem; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; text-align: left;">Person Name / Alias</th>
+                        <th style="padding: 1.1rem 1.5rem; font-size: 0.8rem; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; text-align: left;">Category</th>
+                        <th style="padding: 1.1rem 1.5rem; font-size: 0.8rem; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; text-align: left;">Status</th>
+                        <th style="padding: 1.1rem 1.5rem; font-size: 0.8rem; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; text-align: left;">Biometric Vector</th>
+                        <th style="padding: 1.1rem 1.5rem; font-size: 0.8rem; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; text-align: left;">Registration Date</th>
+                        <th style="padding: 1.1rem 1.5rem; font-size: 0.8rem; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; text-align: right;">Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <!-- Loading state -->
+                    <template x-if="loading">
+                        <tr>
+                            <td colspan="7" style="text-align: center; padding: 4rem 1.5rem; color: var(--text-secondary);">
+                                <div class="cctv-spinner" style="margin: 0 auto 1rem auto;"></div>
+                                Loading person targets...
+                            </td>
+                        </tr>
+                    </template>
+
+                    <!-- Empty state -->
+                    <template x-if="!loading && items.length === 0">
+                        <tr>
+                            <td colspan="7" style="text-align: center; padding: 4rem 1.5rem; color: var(--text-muted);">
+                                <div style="font-size: 1.1rem; font-weight: 500; color: var(--text-secondary);">No person watchlist records found.</div>
+                                <div style="font-size: 0.88rem; margin-top: 0.35rem;">Add a new target or adjust search filters.</div>
+                            </td>
+                        </tr>
+                    </template>
+
+                    <!-- Data rows -->
+                    <template x-for="item in items" :key="item.id">
+                        <tr style="border-bottom: 1px solid rgba(255, 255, 255, 0.04); transition: background 0.15s ease;"
+                            onmouseover="this.style.background='rgba(255,255,255,0.02)'"
+                            onmouseout="this.style.background='transparent'">
+                            
+                            <!-- Portrait thumbnail -->
+                            <td style="padding: 0.9rem 1.5rem; vertical-align: middle;">
+                                <div style="position: relative; width: 48px; height: 48px; border-radius: 8px; overflow: hidden; background: rgba(30, 41, 59, 0.8); border: 1px solid rgba(255,255,255,0.12); cursor: pointer;"
+                                     @click="openPhotoPreview(item)">
+                                    <template x-if="item.photo_path">
+                                        <img :src="item.photo_path" :alt="item.name" style="width: 100%; height: 100%; object-fit: cover;"
+                                             onerror="this.onerror=null; this.parentElement.innerHTML='<div style=\'width:100%;height:100%;display:flex;align-items:center;justify-content:center;color:#94a3b8;font-size:1.2rem;\'>👤</div>';">
+                                    </template>
+                                    <template x-if="!item.photo_path">
+                                        <div style="width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; color: #94a3b8; font-size: 1.2rem;">
+                                            👤
+                                        </div>
+                                    </template>
+                                </div>
+                            </td>
+
+                            <!-- Name & ID -->
+                            <td style="padding: 0.9rem 1.5rem; vertical-align: middle;">
+                                <div style="font-weight: 700; color: var(--text-primary); font-size: 0.98rem;" x-text="item.name"></div>
+                                <div style="font-size: 0.72rem; color: var(--text-muted); font-family: monospace; margin-top: 0.15rem;" x-text="item.id"></div>
+                            </td>
+
+                            <!-- Category -->
+                            <td style="padding: 0.9rem 1.5rem; vertical-align: middle;">
+                                <span class="status-pill" :class="'status-pill--' + item.category" x-text="formatCategory(item.category)"></span>
+                            </td>
+
+                            <!-- Status -->
+                            <td style="padding: 0.9rem 1.5rem; vertical-align: middle;">
+                                <template x-if="item.status === 'active'">
+                                    <span style="display: inline-flex; align-items: center; gap: 0.45rem; padding: 0.25rem 0.65rem; border-radius: 9999px; font-size: 0.78rem; font-weight: 600; background: rgba(34, 197, 94, 0.12); color: #4ade80; border: 1px solid rgba(34, 197, 94, 0.3);">
+                                        <span style="width: 7px; height: 7px; border-radius: 50%; background: #22c55e; box-shadow: 0 0 8px #22c55e;"></span>
+                                        Active Target
+                                    </span>
+                                </template>
+                                <template x-if="item.status === 'resolved'">
+                                    <span style="display: inline-flex; align-items: center; gap: 0.45rem; padding: 0.25rem 0.65rem; border-radius: 9999px; font-size: 0.78rem; font-weight: 600; background: rgba(148, 163, 184, 0.12); color: #94a3b8; border: 1px solid rgba(148, 163, 184, 0.25);">
+                                        Case Resolved
+                                    </span>
+                                </template>
+                            </td>
+
+                            <!-- Biometric Vector status -->
+                            <td style="padding: 0.9rem 1.5rem; vertical-align: middle;">
+                                <div style="display: inline-flex; align-items: center; gap: 0.4rem; padding: 0.25rem 0.55rem; border-radius: 6px; background: rgba(99, 102, 241, 0.1); border: 1px solid rgba(99, 102, 241, 0.25); color: #a5b4fc; font-size: 0.75rem; font-weight: 600; font-family: monospace;">
+                                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                                    512-D VECTOR (Indexed)
+                                </div>
+                            </td>
+
+                            <!-- Registration Date -->
+                            <td style="padding: 0.9rem 1.5rem; vertical-align: middle; color: var(--text-secondary); font-size: 0.85rem;">
+                                <span x-text="formatDate(item.created_at)"></span>
+                            </td>
+
+                            <!-- Actions -->
+                            <td style="padding: 0.9rem 1.5rem; vertical-align: middle; text-align: right;">
+                                <div style="display: inline-flex; align-items: center; gap: 0.5rem;">
+                                    <!-- Toggle status button -->
+                                    <button class="btn btn--secondary btn--sm"
+                                            @click="toggleStatus(item)"
+                                            style="padding: 0.35rem 0.65rem; font-size: 0.78rem;"
+                                            :title="item.status === 'active' ? 'Mark as Resolved' : 'Mark as Active'">
+                                        <span x-text="item.status === 'active' ? 'Resolve' : 'Reactivate'"></span>
+                                    </button>
+
+                                    <!-- Delete button -->
+                                    <button class="btn btn--sm"
+                                            @click="deleteItem(item.id)"
+                                            style="padding: 0.35rem 0.55rem; background: rgba(239, 68, 68, 0.12); color: #ef4444; border: 1px solid rgba(239, 68, 68, 0.25);"
+                                            title="Delete Target">
+                                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
+                                    </button>
+                                </div>
+                            </td>
+                        </tr>
+                    </template>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- ── Add Person Target Modal ────────────────────────────────────── -->
+    <div x-show="showAddModal" class="modal-overlay" style="position: fixed; inset: 0; background: rgba(0,0,0,0.8); backdrop-filter: blur(8px); display: flex; align-items: center; justify-content: center; z-index: 2000; padding: 1.5rem;"
+         x-transition:enter="transition ease-out duration-200"
+         x-transition:enter-start="opacity-0"
+         x-transition:enter-end="opacity-100"
+         x-transition:leave="transition ease-in duration-150"
+         x-transition:leave-start="opacity-100"
+         x-transition:leave-end="opacity-0"
+         @click.self="showAddModal = false"
+         style="display: none;">
+
+        <div class="modal-card card" style="width: 100%; max-width: 640px; max-height: 90vh; overflow-y: auto; background: #0f172a; border: 1px solid rgba(255,255,255,0.12); border-radius: var(--radius-xl); padding: 2rem; box-shadow: 0 20px 40px rgba(0,0,0,0.6);"
+             x-transition:enter="transition ease-out duration-200"
+             x-transition:enter-start="opacity-0 transform scale-95"
+             x-transition:enter-end="opacity-100 transform scale-100">
+
+            <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 1.25rem;">
+                <div>
+                    <h2 style="font-size: 1.35rem; font-weight: 800; color: var(--text-primary); letter-spacing: -0.02em;">
+                        Register Person to Watchlist
+                    </h2>
+                    <p style="color: var(--text-secondary); font-size: 0.85rem; margin-top: 0.2rem;">
+                        5-gate AI verification will be enforced before generating the 512-d vector.
+                    </p>
+                </div>
+                <button type="button" @click="showAddModal = false" style="background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 1.4rem; padding: 0.2rem;">&times;</button>
+            </div>
+
+            <!-- Error Banner -->
+            <div x-show="errorMessage" class="alert alert--danger" style="margin-bottom: 1.25rem; padding: 0.85rem 1rem; border-radius: 8px; background: rgba(239, 68, 68, 0.12); border: 1px solid rgba(239, 68, 68, 0.35); color: #fca5a5; font-size: 0.88rem; line-height: 1.45;">
+                <div style="font-weight: 700; margin-bottom: 0.25rem; display: flex; align-items: center; gap: 0.4rem;">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg>
+                    Quality Gate Check Failed
+                </div>
+                <div x-text="errorMessage"></div>
+            </div>
+
+            <!-- Quality Gates Info Pill -->
+            <div style="margin-bottom: 1.5rem; padding: 0.75rem 1rem; border-radius: 8px; background: rgba(99, 102, 241, 0.08); border: 1px solid rgba(99, 102, 241, 0.2); font-size: 0.78rem; color: #cbd5e1;">
+                <span style="font-weight: 700; color: var(--accent-light);">🛡️ Enforced AI Quality Gates:</span>
+                Single human face &bull; No border cut-off &bull; Sharp face ROI (&ge;30.0) &bull; 3D Pose (|Yaw|&le;25&deg;, |Pitch|&le;20&deg;, |Roll|&le;20&deg;).
+            </div>
+
+            <form @submit.prevent="submitAddForm()">
+                <!-- Photo Upload Field with Drag & Drop -->
+                <div class="form-group" style="margin-bottom: 1.4rem;">
+                    <label class="form-label" style="display: block; margin-bottom: 0.5rem; font-weight: 600; font-size: 0.9rem;">
+                        Reference Portrait Photo <span style="color: #ef4444;">*</span>
+                    </label>
+                    
+                    <div style="border: 2px dashed rgba(255, 255, 255, 0.16); border-radius: var(--radius-lg); padding: 1.5rem; text-align: center; cursor: pointer; transition: all 0.2s ease; background: rgba(15, 23, 42, 0.4);"
+                         @click="$refs.photoInput.click()"
+                         :style="photoPreview ? 'border-color: var(--accent); background: rgba(99, 102, 241, 0.05);' : ''"
+                         onmouseover="this.style.borderColor='rgba(255,255,255,0.3)'"
+                         onmouseout="if(!document.getElementById('photo-preview')) this.style.borderColor='rgba(255,255,255,0.16)'">
+                        
+                        <input type="file" x-ref="photoInput" @change="handlePhotoSelect($event)" accept="image/jpeg,image/png,image/jpg" style="display: none;" required>
+
+                        <template x-if="!photoPreview">
+                            <div>
+                                <div style="font-size: 2.2rem; margin-bottom: 0.4rem;">📸</div>
+                                <div style="font-weight: 600; color: var(--text-primary); font-size: 0.92rem;">Click to upload reference portrait</div>
+                                <div style="color: var(--text-muted); font-size: 0.78rem; margin-top: 0.25rem;">JPEG or PNG &bull; Max 15 MB &bull; Clear front-facing photo</div>
+                            </div>
+                        </template>
+
+                        <template x-if="photoPreview">
+                            <div id="photo-preview" style="display: flex; align-items: center; gap: 1.25rem; text-align: left;">
+                                <img :src="photoPreview" alt="Preview" style="width: 80px; height: 80px; object-fit: cover; border-radius: 8px; border: 2px solid var(--accent); box-shadow: 0 4px 12px rgba(0,0,0,0.4);">
+                                <div style="flex: 1; min-width: 0;">
+                                    <div style="font-weight: 700; color: var(--text-primary); font-size: 0.92rem; text-overflow: ellipsis; overflow: hidden; white-space: nowrap;" x-text="photoFileName"></div>
+                                    <div style="color: var(--text-muted); font-size: 0.8rem; margin-top: 0.2rem;" x-text="photoFileSize"></div>
+                                    <button type="button" class="btn btn--secondary btn--sm" @click.stop="$refs.photoInput.click()" style="margin-top: 0.5rem; padding: 0.25rem 0.6rem; font-size: 0.78rem;">
+                                        Change Photo
+                                    </button>
+                                </div>
+                            </div>
+                        </template>
+                    </div>
+                </div>
+
+                <!-- Full Name Field -->
+                <div class="form-group" style="margin-bottom: 1.35rem;">
+                    <label class="form-label" style="display: block; margin-bottom: 0.45rem; font-weight: 600; font-size: 0.9rem;">
+                        Full Name or Alias <span style="color: #ef4444;">*</span>
+                    </label>
+                    <input type="text" class="form-input" placeholder="e.g. Ramesh Kumar, alias 'Rocky'..."
+                           x-model="formData.name" required minlength="2" maxlength="120"
+                           style="width: 100%; padding: 0.7rem 0.95rem; font-size: 0.92rem;">
+                </div>
+
+                <!-- Category & Status Grid -->
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1.25rem; margin-bottom: 1.75rem;">
+                    <div class="form-group">
+                        <label class="form-label" style="display: block; margin-bottom: 0.45rem; font-weight: 600; font-size: 0.9rem;">
+                            Category <span style="color: #ef4444;">*</span>
+                        </label>
+                        <select class="form-select" x-model="formData.category" required style="width: 100%; padding: 0.65rem 0.85rem;">
+                            <option value="wanted">Wanted Suspect</option>
+                            <option value="missing">Missing Person</option>
+                            <option value="suspect">Under Surveillance</option>
+                        </select>
+                    </div>
+
+                    <div class="form-group">
+                        <label class="form-label" style="display: block; margin-bottom: 0.45rem; font-weight: 600; font-size: 0.9rem;">
+                            Status
+                        </label>
+                        <select class="form-select" x-model="formData.status" required style="width: 100%; padding: 0.65rem 0.85rem;">
+                            <option value="active">Active Target</option>
+                            <option value="resolved">Resolved</option>
+                        </select>
+                    </div>
+                </div>
+
+                <!-- Buttons -->
+                <div style="display: flex; justify-content: flex-end; gap: 0.85rem; border-top: 1px solid rgba(255,255,255,0.08); padding-top: 1.35rem;">
+                    <button type="button" class="btn btn--secondary" @click="showAddModal = false" style="padding: 0.65rem 1.25rem;">Cancel</button>
+                    <button type="submit" class="btn btn--primary" :disabled="submitting || !selectedFile || formData.name.trim().length < 2" style="padding: 0.65rem 1.4rem; font-weight: 600;">
+                        <span x-show="!submitting">Verify & Save Target</span>
+                        <span x-show="submitting" style="display: inline-flex; align-items: center; gap: 0.4rem;">
+                            <div class="cctv-spinner" style="width: 14px; height: 14px; margin: 0;"></div>
+                            Verifying & Encoding...
+                        </span>
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- ── Photo Inspection Lightbox Modal ────────────────────────────── -->
+    <div x-show="showPhotoModal" class="modal-overlay" style="position: fixed; inset: 0; background: rgba(0,0,0,0.85); backdrop-filter: blur(10px); display: flex; align-items: center; justify-content: center; z-index: 2100; padding: 1.5rem;"
+         x-transition:enter="transition ease-out duration-200"
+         x-transition:enter-start="opacity-0"
+         x-transition:enter-end="opacity-100"
+         x-transition:leave="transition ease-in duration-150"
+         x-transition:leave-start="opacity-100"
+         x-transition:leave-end="opacity-0"
+         @click.self="showPhotoModal = false"
+         style="display: none;">
+
+        <div style="background: #0f172a; border: 1px solid rgba(255,255,255,0.15); border-radius: var(--radius-xl); padding: 1.5rem; max-width: 420px; width: 100%; text-align: center;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+                <div style="font-weight: 700; color: var(--text-primary); font-size: 1rem;" x-text="activePhotoPerson.name"></div>
+                <button type="button" @click="showPhotoModal = false" style="background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 1.4rem;">&times;</button>
+            </div>
+            <div style="width: 100%; height: 320px; border-radius: 12px; overflow: hidden; background: #000; border: 1px solid rgba(255,255,255,0.1); margin-bottom: 1rem;">
+                <img :src="activePhotoPerson.photo_path" :alt="activePhotoPerson.name" style="width: 100%; height: 100%; object-fit: cover;">
+            </div>
+            <div style="font-size: 0.8rem; color: var(--text-muted); font-family: monospace;" x-text="'ID: ' + activePhotoPerson.id"></div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block head_extra %}
+<style>
+/* Category Status Pills matching theme */
+.status-pill {
+    display: inline-block;
+    padding: 0.28rem 0.65rem;
+    border-radius: 6px;
+    font-size: 0.78rem;
+    font-weight: 600;
+    letter-spacing: 0.03em;
+}
+
+.status-pill--wanted {
+    background: rgba(239, 68, 68, 0.12);
+    color: #f87171;
+    border: 1px solid rgba(239, 68, 68, 0.25);
+}
+
+.status-pill--missing {
+    background: rgba(245, 158, 11, 0.12);
+    color: #fbbf24;
+    border: 1px solid rgba(245, 158, 11, 0.25);
+}
+
+.status-pill--suspect {
+    background: rgba(168, 85, 247, 0.12);
+    color: #c084fc;
+    border: 1px solid rgba(168, 85, 247, 0.25);
+}
+</style>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function personsWatchlistPage() {
+    return {
+        items: [],
+        loading: true,
+        submitting: false,
+        searchQuery: '',
+        selectedCategory: '',
+        selectedStatus: '',
+        showAddModal: false,
+        showPhotoModal: false,
+        errorMessage: '',
+        activePhotoPerson: {},
+        selectedFile: null,
+        photoPreview: null,
+        photoFileName: '',
+        photoFileSize: '',
+        stats: {
+            active: 0,
+            wanted: 0,
+            missing: 0,
+            suspect: 0,
+            resolved: 0,
+        },
+        formData: {
+            name: '',
+            category: 'wanted',
+            status: 'active',
+        },
+
+        async init() {
+            await this.loadWatchlist();
+        },
+
+        async loadWatchlist() {
+            this.loading = true;
+            try {
+                let url = '/api/v1/watchlist/persons?limit=500';
+                if (this.selectedStatus) url += `&status=${encodeURIComponent(this.selectedStatus)}`;
+                if (this.selectedCategory) url += `&category=${encodeURIComponent(this.selectedCategory)}`;
+                if (this.searchQuery) url += `&name=${encodeURIComponent(this.searchQuery)}`;
+
+                const res = await fetch(url);
+                if (res.ok) {
+                    this.items = await res.json();
+                    this.computeStats();
+                } else {
+                    console.error('Failed to load person watchlist:', res.status);
+                }
+            } catch (err) {
+                console.error('Error fetching person watchlist:', err);
+            } finally {
+                this.loading = false;
+            }
+        },
+
+        computeStats() {
+            let active = 0, wanted = 0, missing = 0, suspect = 0, resolved = 0;
+            this.items.forEach(item => {
+                if (item.status === 'active') {
+                    active++;
+                    if (item.category === 'wanted') wanted++;
+                    if (item.category === 'missing') missing++;
+                    if (item.category === 'suspect') suspect++;
+                } else if (item.status === 'resolved') {
+                    resolved++;
+                }
+            });
+            this.stats.active = active;
+            this.stats.wanted = wanted;
+            this.stats.missing = missing;
+            this.stats.suspect = suspect;
+            this.stats.resolved = resolved;
+        },
+
+        formatCategory(cat) {
+            const map = { 'wanted': 'WANTED', 'missing': 'MISSING', 'suspect': 'SURVEILLANCE' };
+            return map[cat] || (cat ? cat.toUpperCase() : '');
+        },
+
+        formatDate(iso) {
+            if (!iso) return '—';
+            try {
+                const d = new Date(iso);
+                return d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
+            } catch (e) {
+                return iso;
+            }
+        },
+
+        resetFilters() {
+            this.searchQuery = '';
+            this.selectedCategory = '';
+            this.selectedStatus = '';
+            this.loadWatchlist();
+        },
+
+        openAddModal() {
+            this.errorMessage = '';
+            this.selectedFile = null;
+            this.photoPreview = null;
+            this.photoFileName = '';
+            this.photoFileSize = '';
+            this.formData = {
+                name: '',
+                category: 'wanted',
+                status: 'active',
+            };
+            this.showAddModal = true;
+        },
+
+        handlePhotoSelect(e) {
+            const file = e.target.files[0];
+            if (!file) return;
+            this.selectedFile = file;
+            this.photoFileName = file.name;
+            const kb = Math.round(file.size / 1024);
+            this.photoFileSize = kb > 1024 ? (kb / 1024).toFixed(1) + ' MB' : kb + ' KB';
+
+            const reader = new FileReader();
+            reader.onload = (ev) => {
+                this.photoPreview = ev.target.result;
+            };
+            reader.readAsDataURL(file);
+        },
+
+        async submitAddForm() {
+            if (!this.selectedFile) {
+                this.errorMessage = 'Please upload a reference portrait photo.';
+                return;
+            }
+            if (this.formData.name.trim().length < 2) {
+                this.errorMessage = 'Name must be at least 2 characters long.';
+                return;
+            }
+
+            this.submitting = true;
+            this.errorMessage = '';
+
+            try {
+                const fd = new FormData();
+                fd.append('name', this.formData.name.trim());
+                fd.append('category', this.formData.category);
+                fd.append('status', this.formData.status);
+                fd.append('photo', this.selectedFile);
+
+                const res = await fetch('/api/v1/watchlist/persons', {
+                    method: 'POST',
+                    body: fd,
+                });
+
+                if (res.ok) {
+                    this.showAddModal = false;
+                    await this.loadWatchlist();
+                } else {
+                    const data = await res.json();
+                    if (data.detail && typeof data.detail === 'object' && data.detail.message) {
+                        this.errorMessage = data.detail.message;
+                    } else if (typeof data.detail === 'string') {
+                        this.errorMessage = data.detail;
+                    } else if (Array.isArray(data.detail)) {
+                        this.errorMessage = data.detail.map(d => d.msg || d.message).join(', ');
+                    } else {
+                        this.errorMessage = 'Failed to register person. Face quality verification failed.';
+                    }
+                }
+            } catch (err) {
+                this.errorMessage = 'Network error while registering person.';
+                console.error(err);
+            } finally {
+                this.submitting = false;
+            }
+        },
+
+        openPhotoPreview(item) {
+            this.activePhotoPerson = item;
+            this.showPhotoModal = true;
+        },
+
+        async toggleStatus(item) {
+            const newStatus = item.status === 'active' ? 'resolved' : 'active';
+            const actionText = newStatus === 'resolved' ? 'resolve' : 'reactivate';
+            if (!confirm(`Mark ${item.name} as ${newStatus.toUpperCase()}?`)) return;
+
+            try {
+                const res = await fetch(`/api/v1/watchlist/persons/${item.id}`, {
+                    method: 'PATCH',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ status: newStatus }),
+                });
+                if (res.ok) {
+                    await this.loadWatchlist();
+                }
+            } catch (err) {
+                console.error('Failed to update status:', err);
+            }
+        },
+
+        async deleteItem(id) {
+            if (!confirm('Permanently DELETE this individual from the biometric watchlist?')) return;
+            try {
+                const res = await fetch(`/api/v1/watchlist/persons/${id}`, {
+                    method: 'DELETE',
+                });
+                if (res.ok) {
+                    await this.loadWatchlist();
+                } else {
+                    const data = await res.json();
+                    alert(data.detail || 'Failed to delete record.');
+                }
+            } catch (err) {
+                console.error('Failed to delete item:', err);
+            }
+        }
+    };
+}
+</script>
+{% endblock %}

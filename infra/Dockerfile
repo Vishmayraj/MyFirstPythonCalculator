@@ -8,25 +8,44 @@ RUN apt-get update && \
 WORKDIR /app
 
 # Install Python deps — model1 first, then model2 (VMS ingestion)
-# Note: ultralytics/torch excluded — AI pipeline runs locally, not in container
 COPY model1-registry/requirements.txt /app/requirements.txt
-COPY model2-analytics/requirements.txt /app/requirements-model2.txt
-RUN grep -vE '^(ultralytics|torch|torchvision|nvidia)' /app/requirements.txt > /tmp/r1.txt \
-    && grep -vE '^(ultralytics|torch|torchvision|nvidia)' /app/requirements-model2.txt > /tmp/r2.txt \
-    && pip install --no-cache-dir -r /tmp/r1.txt -r /tmp/r2.txt \
-    && rm /tmp/r1.txt /tmp/r2.txt
+COPY model2_analytics/requirements.txt /app/requirements-model2.txt
+RUN pip install --no-cache-dir -r requirements.txt -r requirements-model2.txt
 
-# ANPR pipeline deps (needed by model2-analytics/pipeline — plate detect + OCR)
+# ANPR pipeline deps (needed by model2_analytics/pipeline — plate detect + OCR)
 RUN pip install --no-cache-dir ultralytics onnxruntime onnxocr
 
 # Copy source
 COPY shared/ /app/shared/
 COPY model1-registry/app/ /app/app/
-COPY model2-analytics/ /model2-analytics/
-COPY model2-analytics/app/ /app/model2_analytics_src/
 COPY model2_analytics/ /app/model2_analytics/
 
-ENV PYTHONPATH=/app:/model2-analytics:/app/model2_analytics_src
+# Standard hardening: run as a non-root user instead of the container
+# default (root). Not urgent on its own (this app doesn't execute
+# genuinely untrusted input), but cheap to do and limits the blast
+# radius of any future RCE-class bug (AuditReport1.md finding 21 / 4.3).
+# /app/model2_analytics/{detection-image,uploads} need to stay writable -
+# the detection pipeline and uploads router write into them at runtime -
+# so they're chowned explicitly rather than relying on a blanket
+# `chown -R` catching everything by coincidence.
+RUN useradd --system --create-home --uid 1000 --shell /usr/sbin/nologin appuser && \
+    chown -R appuser:appuser /app && \
+    mkdir -p /app/model2_analytics/detection-image /app/model2_analytics/uploads && \
+    chown -R appuser:appuser /app/model2_analytics/detection-image /app/model2_analytics/uploads
+USER appuser
+
+# AuditReport2.md finding 5: model2_analytics/ used to be COPY'd into the
+# image three separate times under three different names/paths (the full
+# hyphenated package, an app/-only copy, and the underscored shim) so that
+# each of its three import spellings (`pipeline.*`, `ingestion.*`,
+# `model2_analytics.app.ingestion.*` — see supervisor.py and
+# model1-registry/app/main.py) would resolve. There's now exactly one copy
+# on disk at /app/model2_analytics/; these three PYTHONPATH entries are
+# what make all three spellings still resolve to that single copy:
+#   /app                      -> model2_analytics.app.ingestion.* (dotted)
+#   /app/model2_analytics     -> pipeline.* (top-level)
+#   /app/model2_analytics/app -> ingestion.* (top-level)
+ENV PYTHONPATH=/app:/app/model2_analytics:/app/model2_analytics/app
 # Runtime config defaults — override via docker-compose environment or .env
 ENV GRID_HOST=cctv.corp8.cloud
 ENV MEDIAMTX_API=mediamtx:9997

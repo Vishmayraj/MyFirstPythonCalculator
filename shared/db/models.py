@@ -24,8 +24,39 @@ from sqlalchemy import (
     CheckConstraint,
     text,
 )
+from sqlalchemy.types import UserDefinedType
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import DeclarativeBase, relationship
+
+
+class PGVector(UserDefinedType):
+    """Custom SQLAlchemy type mapping to pgvector VECTOR(n)."""
+    def __init__(self, dim=512):
+        self.dim = dim
+
+    def get_col_spec(self, **kw):
+        return f"VECTOR({self.dim})"
+
+    def bind_processor(self, dialect):
+        def process(value):
+            if value is None:
+                return None
+            if isinstance(value, (list, tuple)):
+                return "[" + ",".join(str(float(x)) for x in value) + "]"
+            return value
+        return process
+
+    def result_processor(self, dialect, coltype):
+        def process(value):
+            if value is None:
+                return None
+            if isinstance(value, str):
+                cleaned = value.strip("[]() ")
+                if not cleaned:
+                    return []
+                return [float(x) for x in cleaned.split(",")]
+            return value
+        return process
 
 
 class Base(DeclarativeBase):
@@ -227,6 +258,8 @@ class PersonWatchlist(Base):
         nullable=False,
         info={"check": "category IN ('wanted', 'missing', 'suspect')"},
     )
+    face_embedding = Column(PGVector(512))
+    photo_path = Column(Text)
     status = Column(
         Text,
         nullable=False,

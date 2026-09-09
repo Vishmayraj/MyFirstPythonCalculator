@@ -10,7 +10,7 @@ from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 from sqlalchemy.orm import Session, joinedload
 
-from app.auth.dependencies import get_current_user
+from app.auth.dependencies import require_role
 from shared.db.models import Camera as CameraModel
 from shared.db.models import StatusHistory as StatusHistoryModel
 from shared.db.models import User as UserModel
@@ -34,18 +34,35 @@ class AuditItemResponse(BaseModel):
 def get_global_audit_log(
     limit: int = Query(200, ge=1, le=1000),
     db: Session = Depends(get_db),
-    current_user: UserModel = Depends(get_current_user),
+    # AuditReport1.md #8: the global audit trail is camera change history
+    # across every department, which is a step above what a read-only
+    # "viewer" account (no department, read-only per Project_Context.md
+    # §3) should be able to pull in one request. Scoped the same way the
+    # rest of this codebase scopes department-sensitive data: dept_admin
+    # and operator can see it (both are staff who act on cameras day to
+    # day), further narrowed to their own department below when they have
+    # one; viewer is excluded from this endpoint entirely (403).
+    current_user: UserModel = Depends(require_role("dept_admin", "operator")),
 ):
-    """Retrieve global system audit trail, ordered by changed_at DESC."""
-    rows = (
-        db.query(StatusHistoryModel)
-        .options(
-            joinedload(StatusHistoryModel.camera),
-        )
-        .order_by(StatusHistoryModel.changed_at.desc())
-        .limit(limit)
-        .all()
+    """Retrieve system audit trail, ordered by changed_at DESC.
+
+    Scoped to the caller's department when they have one (matching the
+    same `current_user.department_id` convention used for camera
+    mutations in cameras.py) - a department-scoped dept_admin/operator
+    only sees history for cameras in their own department. Callers with
+    no department_id (global admins/operators) see the full cross-
+    department trail, same as before.
+    """
+    query = db.query(StatusHistoryModel).options(
+        joinedload(StatusHistoryModel.camera),
     )
+    if current_user.department_id:
+        query = query.filter(
+            StatusHistoryModel.camera.has(
+                CameraModel.department_id == current_user.department_id
+            )
+        )
+    rows = query.order_by(StatusHistoryModel.changed_at.desc()).limit(limit).all()
 
     # Gather unique changed_by user IDs for efficient lookup
     user_ids = {r.changed_by for r in rows if r.changed_by is not None}
