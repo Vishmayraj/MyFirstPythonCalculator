@@ -8,9 +8,16 @@ RUN apt-get update && \
 WORKDIR /app
 
 # Install Python deps — model1 first, then model2 (VMS ingestion)
+# Note: ultralytics/torch excluded — AI pipeline runs locally, not in container
 COPY model1-registry/requirements.txt /app/requirements.txt
 COPY model2-analytics/requirements.txt /app/requirements-model2.txt
-RUN pip install --no-cache-dir -r requirements.txt -r requirements-model2.txt
+RUN grep -vE '^(ultralytics|torch|torchvision|nvidia)' /app/requirements.txt > /tmp/r1.txt \
+    && grep -vE '^(ultralytics|torch|torchvision|nvidia)' /app/requirements-model2.txt > /tmp/r2.txt \
+    && pip install --no-cache-dir -r /tmp/r1.txt -r /tmp/r2.txt \
+    && rm /tmp/r1.txt /tmp/r2.txt
+
+# ANPR pipeline deps (needed by model2-analytics/pipeline — plate detect + OCR)
+RUN pip install --no-cache-dir ultralytics onnxruntime onnxocr
 
 # Copy source
 COPY shared/ /app/shared/

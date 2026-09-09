@@ -419,12 +419,32 @@ def watchlist_page(
 
 
 @router.get("/alerts", response_class=HTMLResponse)
-def alerts_placeholder(request: Request):
+def alerts_page(
+    request: Request,
+    user: Optional[UserModel] = Depends(get_optional_current_user),
+):
+    """Watchlist Alerts — list, acknowledge, and live alert stream."""
+    if not user:
+        return RedirectResponse(url="/login", status_code=302)
     return request.app.state.templates.TemplateResponse(
         request=request,
-        name="placeholder.html",
-        context={
-            "page_title": "Alerts",
-            "description": "Model 2 — not built yet, see docs/API_Contract.md §2",
-        },
+        name="alerts.html",
+        context={"user": user},
+    )
+
+# ── ANPR Pipeline Test page (Model 2) ───────────────────────────
+
+
+@router.get("/anpr", response_class=HTMLResponse)
+def anpr_page(
+    request: Request,
+    user: Optional[UserModel] = Depends(get_optional_current_user),
+):
+    """ANPR Pipeline Test — upload image and test full pipeline."""
+    if not user:
+        return RedirectResponse(url="/login", status_code=302)
+    return request.app.state.templates.TemplateResponse(
+        request=request,
+        name="anpr.html",
+        context={"user": user},
     )

@@ -17,6 +17,16 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from pipeline.plate.interface import PlateRecognizerInterface, PlateRecognizerStub
+
+# Real ANPR engine (YOLO plate detect + EasyOCR). Imported lazily so the
+# container (which excludes torch/ultralytics) still boots — falls back to stub.
+def _default_plate_recognizer() -> PlateRecognizerInterface:
+    try:
+        from pipeline.plate.anpr_pipeline import ANPRPipeline
+        return ANPRPipeline.get_instance()
+    except Exception as e:
+        logger.warning(f"ANPRPipeline unavailable ({e}) — using PlateRecognizerStub")
+        return PlateRecognizerStub()
 from pipeline.tracking.associator_interface import (
     TrackAssociatorInterface,
     TrackAssociatorStub,
@@ -45,7 +55,7 @@ class DetectionWriter:
         plate_recognizer: Optional[PlateRecognizerInterface] = None,
         track_associator: Optional[TrackAssociatorInterface] = None,
     ):
-        self.plate_recognizer = plate_recognizer or PlateRecognizerStub()
+        self.plate_recognizer = plate_recognizer or _default_plate_recognizer()
         self.track_associator = track_associator or TrackAssociatorStub()
 
     def persist_sighting(

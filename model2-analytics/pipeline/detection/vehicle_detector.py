@@ -75,7 +75,7 @@ class VehicleDetector:
 
     def __init__(
         self,
-        confidence_threshold: float = 0.40,
+        confidence_threshold: float = 0.25,  # LOWERED from 0.40 to detect more vehicles
         iou_threshold: float = 0.45,
         device: Optional[str] = None,
     ):
@@ -160,7 +160,7 @@ class VehicleDetector:
         try:
             results = self._model.predict(
                 source=frame,
-                imgsz=480,
+                imgsz=1280,  # INCREASED from 480 to preserve more detail (2.7x larger objects)
                 conf=self.confidence_threshold,
                 iou=self.iou_threshold,
                 classes=self._target_cls,   # None = all (Indian model); list = COCO subset

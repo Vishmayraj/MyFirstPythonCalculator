@@ -23,3 +23,49 @@ model2-analytics/pipeline/*.pt
 model2-analytics/pipeline/*.cache
 model2-analytics/pipeline/dataset.yaml
 demo_results/
+
+# -- ANPR dev artifacts & one-off scripts (not for repo) --
+# Heavy datasets / models / training outputs
+anpr_yolo_dataset/
+anpr_indian_test_results/
+runs/
+Test Input/
+model2-analytics/ANPR bhidio/
+model2-analytics/pipeline/plate/indian_models/
+model2-analytics/pipeline/plate/license_plate_detector.pt
+yolov8n.pt
+
+# Logs & debug dumps
+*.log
+*_out.txt
+found_plate_*.jpg
+plate_debug_*.jpg
+test_detection_*.jpg
+query
+
+# One-off experiment scripts (keepers excluded below)
+test_*.py
+!test_anpr_alert_pipeline.py
+!test_e2e_pipeline.py
+final_test*.py
+phase1_*.py
+phase1_*.ps1
+diagnostic_*.py
+download_*.py
+generate_*.py
+visualize_*.py
+prepare_dataset.py
+quick_train.py
+verify_dataset.py
+finetune_plate_detector.py
+
+# Temp helper scripts from the build session
+container_dep_check.py
+dump_results.py
+ws_check.py
+ws_check2.py
+implementation_plan.md
+model2-analytics/pipeline/analyze_live.py
+model2-analytics/pipeline/check_cuda.py
+model2-analytics/pipeline/check_dataset.py
+model2-analytics/pipeline/verify_live.py

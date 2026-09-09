@@ -1,0 +1,13 @@
+# Large files that don't belong in Docker context
+model2-analytics/pipeline/dataset/
+model2-analytics/pipeline/runs/
+weights/
+demo_results/
+*.pt
+*.onnx
+__pycache__/
+*.pyc
+.git/
+node_modules/
+.claude/
+model2-analytics/pipeline/detection-image/

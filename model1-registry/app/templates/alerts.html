@@ -1,0 +1,244 @@
+{% extends "base.html" %}
+{% block title %}Sentinel — Watchlist Alerts{% endblock %}
+
+{% block content %}
+<div class="page-container" style="max-width: 1380px; margin: 0 auto; padding: 2rem 1.5rem;">
+    <!-- Header -->
+    <div class="page-header" style="margin-bottom: 2rem; display: flex; align-items: flex-start; justify-content: space-between; flex-wrap: wrap; gap: 1rem;">
+        <div>
+            <h1 class="page-title" style="font-size: 1.75rem; font-weight: 800; color: var(--text-primary); letter-spacing: -0.02em;">
+                🚨 Watchlist Alerts
+            </h1>
+            <p style="color: var(--text-secondary); font-size: 0.95rem; margin-top: 0.35rem;">
+                Real-time alerts generated when the ANPR pipeline reads a watchlisted plate.
+            </p>
+        </div>
+        <span class="ws-pill"><span class="ws-dot" id="wsDot"></span> <span id="wsText">Connecting…</span></span>
+    </div>
+
+    <!-- Stat tiles -->
+    <div class="stats-grid-alerts">
+        <div class="stat-tile">
+            <div class="stat-tile-label">Total Alerts</div>
+            <div class="stat-tile-value" id="stTotal">—</div>
+        </div>
+        <div class="stat-tile stat-tile--today">
+            <div class="stat-tile-label">Today</div>
+            <div class="stat-tile-value" id="stToday">—</div>
+        </div>
+        <div class="stat-tile stat-tile--unacked">
+            <div class="stat-tile-label">Unacknowledged</div>
+            <div class="stat-tile-value" id="stUnacked">—</div>
+        </div>
+        <div class="stat-tile stat-tile--critical">
+            <div class="stat-tile-label">Critical</div>
+            <div class="stat-tile-value" id="stCritical">—</div>
+        </div>
+        <div class="stat-tile stat-tile--high">
+            <div class="stat-tile-label">High</div>
+            <div class="stat-tile-value" id="stHigh">—</div>
+        </div>
+    </div>
+
+    <!-- Alert Feed -->
+    <div class="card" style="border-radius: var(--radius-lg); overflow: hidden;">
+        <div class="alerts-toolbar">
+            <input type="text" id="searchInput" class="form-input" placeholder="Search plate, category or camera…" style="flex:1; min-width:180px;">
+            <select id="sevFilter" class="form-select" style="max-width:160px;">
+                <option value="">All severities</option>
+                <option value="critical">Critical</option>
+                <option value="high">High</option>
+                <option value="medium">Medium</option>
+                <option value="low">Low</option>
+            </select>
+            <label style="display:flex;align-items:center;gap:.45rem;font-size:.8rem;color:var(--text-secondary);cursor:pointer;white-space:nowrap;">
+                <input type="checkbox" id="unackedOnly" style="accent-color:var(--accent);"> Unacknowledged only
+            </label>
+            <span class="feed-count" id="feedCount"></span>
+        </div>
+        <div id="alertList" style="padding:1.1rem;">
+            <div class="al-empty"><span class="al-empty-icon">⏳</span>Loading alerts…</div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block head_extra %}
+<style>
+/* ── Page-scoped styles (Alerts) ─────────────────────────── */
+.stats-grid-alerts{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:1.25rem;margin-bottom:1.75rem;}
+.stat-tile{background:rgba(17,24,39,0.7);border:1px solid rgba(255,255,255,0.08);border-radius:var(--radius-lg);padding:1.4rem;transition:border-color var(--transition-fast);}
+.stat-tile:hover{border-color:rgba(255,255,255,0.16);}
+.stat-tile-label{font-size:0.8rem;color:var(--text-muted);text-transform:uppercase;font-weight:600;letter-spacing:0.05em;}
+.stat-tile-value{font-size:1.85rem;font-weight:800;color:var(--text-primary);margin-top:0.4rem;}
+.stat-tile--unacked{background:rgba(239,68,68,0.06);border-color:rgba(239,68,68,0.22);}
+.stat-tile--unacked .stat-tile-value{color:#ef4444;}
+.stat-tile--critical{background:rgba(239,68,68,0.06);border-color:rgba(239,68,68,0.22);}
+.stat-tile--critical .stat-tile-value{color:#f87171;}
+.stat-tile--high{background:rgba(245,158,11,0.06);border-color:rgba(245,158,11,0.22);}
+.stat-tile--high .stat-tile-value{color:#fbbf24;}
+.stat-tile--today{background:rgba(99,102,241,0.06);border-color:rgba(99,102,241,0.25);}
+.stat-tile--today .stat-tile-value{color:#818cf8;}
+
+.alerts-toolbar{display:flex;flex-wrap:wrap;align-items:center;gap:0.75rem;padding:1rem 1.25rem;border-bottom:1px solid var(--border-subtle);}
+.alerts-toolbar .form-input{max-width:260px;}
+.feed-count{margin-left:auto;font-size:0.78rem;color:var(--text-muted);white-space:nowrap;}
+.al-row{position:relative;display:flex;align-items:center;gap:1rem;padding:1rem 1.1rem;border-radius:var(--radius-md);margin-bottom:0.7rem;background:rgba(17,24,39,0.6);border:1px solid var(--border-glass);border-left:3px solid var(--text-muted);transition:border-color var(--transition-fast),transform var(--transition-fast),box-shadow var(--transition-fast);}
+.al-row:hover{transform:translateY(-1px);box-shadow:var(--shadow-md);}
+.al-row.al-critical{border-left-color:#ef4444;background:rgba(239,68,68,0.07);border-color:rgba(239,68,68,0.35);}
+.al-row.al-high{border-left-color:#f87171;background:rgba(239,68,68,0.04);border-color:rgba(239,68,68,0.2);}
+.al-row.al-medium{border-left-color:#f59e0b;background:rgba(245,158,11,0.04);border-color:rgba(245,158,11,0.2);}
+.al-row.al-low{border-left-color:rgba(148,163,184,0.6);}
+.al-row.al-acked{opacity:0.55;}
+@keyframes alIn{from{opacity:0;transform:translateY(-8px);}to{opacity:1;transform:none;}}
+.al-row.al-new{animation:alIn 350ms cubic-bezier(0.4,0,0.2,1);}
+.al-sev{font-size:0.68rem;font-weight:800;letter-spacing:0.05em;text-transform:uppercase;border-radius:var(--radius-sm);padding:0.25rem 0.55rem;white-space:nowrap;}
+.al-sev--critical{background:#ef4444;color:#fff;box-shadow:0 0 12px rgba(239,68,68,0.45);}
+.al-sev--high{background:rgba(239,68,68,0.18);color:#f87171;border:1px solid rgba(239,68,68,0.4);}
+.al-sev--medium{background:rgba(245,158,11,0.15);color:#fbbf24;border:1px solid rgba(245,158,11,0.35);}
+.al-sev--low{background:rgba(148,163,184,0.15);color:#94a3b8;border:1px solid rgba(148,163,184,0.3);}
+.al-plate{font-family:var(--font);font-weight:800;font-size:0.9rem;letter-spacing:1.5px;background:#f8fafc;color:#0f172a;border-radius:4px;padding:0.25rem 0.55rem;white-space:nowrap;}
+.al-plate::before{content:"IND";font-size:0.5rem;color:#1e40af;margin-right:0.35rem;padding-right:0.35rem;border-right:1px solid #cbd5e1;}
+.al-body{flex:1;min-width:0;}
+.al-cat{font-size:0.72rem;font-weight:700;color:var(--accent-light);text-transform:uppercase;letter-spacing:0.04em;}
+.al-desc{font-size:0.83rem;color:var(--text-secondary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.al-meta{font-size:0.7rem;color:var(--text-muted);margin-top:0.2rem;}
+.al-ack{font-size:0.72rem;font-weight:700;padding:0.42rem 0.85rem;border-radius:var(--radius-sm);cursor:pointer;border:1px solid rgba(99,102,241,0.4);background:rgba(99,102,241,0.12);color:var(--accent-light);white-space:nowrap;transition:background var(--transition-fast);}
+.al-ack:hover{background:rgba(99,102,241,0.22);}
+.al-ack[disabled]{border-color:rgba(34,197,94,0.4);background:rgba(34,197,94,0.1);color:#4ade80;cursor:default;}
+.al-empty{display:flex;flex-direction:column;align-items:center;gap:0.6rem;color:var(--text-muted);font-size:0.9rem;padding:3rem 1rem;text-align:center;}
+.al-empty-icon{font-size:2.2rem;opacity:0.6;}
+.ws-pill{display:inline-flex;align-items:center;gap:0.45rem;font-size:0.78rem;font-weight:600;color:var(--text-secondary);background:rgba(17,24,39,0.7);border:1px solid var(--border-glass);border-radius:999px;padding:0.4rem 0.9rem;}
+.ws-pill .ws-dot{width:8px;height:8px;border-radius:50%;background:var(--text-muted);}
+.ws-pill .ws-dot.ws-dot--on{background:var(--success);box-shadow:0 0 8px var(--success);animation:pulseWs 2s infinite;}
+@keyframes pulseWs{0%,100%{opacity:1;}50%{opacity:0.5;}}
+</style>
+{% endblock %}
+{% block scripts %}
+<script>
+let ALERTS = [];
+const acked = new Set();
+const seenIds = new Set();
+let firstRenderDone = false;
+
+function esc(s) { const d = document.createElement('div'); d.textContent = s == null ? '' : String(s); return d.innerHTML; }
+function fmtTime(iso) { try { return new Date(iso).toLocaleString(); } catch (_) { return iso || ''; } }
+function fmtRelative(iso) {
+    try {
+        const diff = (Date.now() - new Date(iso).getTime()) / 1000;
+        if (diff < 60) return 'just now';
+        if (diff < 3600) return Math.floor(diff / 60) + 'm ago';
+        if (diff < 86400) return Math.floor(diff / 3600) + 'h ago';
+        return Math.floor(diff / 86400) + 'd ago';
+    } catch (_) { return ''; }
+}
+
+async function loadAlerts() {
+    try {
+        const [ar, sr] = await Promise.all([fetch('/api/v1/alerts'), fetch('/api/v1/alerts/stats')]);
+        const data = await ar.json();
+        ALERTS = (data.alerts || []).slice().sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+        (data.alerts || []).forEach(a => { if (a.acknowledged_at) acked.add(a.id); });
+        if (sr.ok) {
+            const s = (await sr.json()).stats || {};
+            stTotal.textContent = s.total ?? '—';
+            stToday.textContent = s.today ?? '—';
+            stUnacked.textContent = s.unacked ?? '—';
+            const by = s.by_severity || {};
+            stCritical.textContent = by.critical ?? 0;
+            stHigh.textContent = by.high ?? 0;
+        }
+        render();
+        firstRenderDone = true;
+    } catch (err) {
+        document.getElementById('alertList').innerHTML = '<div class="al-empty"><span class="al-empty-icon">⚠️</span>Failed to load: ' + esc(err.message) + '</div>';
+    }
+}
+
+function render() {
+    const listEl = document.getElementById('alertList');
+    const unackedOnly = document.getElementById('unackedOnly').checked;
+    const q = document.getElementById('searchInput').value.trim().toLowerCase();
+    const sevF = document.getElementById('sevFilter').value;
+
+    const rows = ALERTS.filter(a => {
+        const isAcked = acked.has(a.id) || !!a.acknowledged_at;
+        if (unackedOnly && isAcked) return false;
+        if (sevF && (a.severity || 'low').toLowerCase() !== sevF) return false;
+        if (q) {
+            const hay = ((a.detected_plate || '') + ' ' + (a.category || '') + ' ' + (a.camera_name || '') + ' ' + (a.description || '')).toLowerCase();
+            if (!hay.includes(q)) return false;
+        }
+        return true;
+    });
+
+    document.getElementById('feedCount').textContent = ALERTS.length
+        ? rows.length + ' of ' + ALERTS.length + ' alerts'
+        : '';
+
+    if (!rows.length) {
+        listEl.innerHTML = '<div class="al-empty"><span class="al-empty-icon">🛡️</span>'
+            + (ALERTS.length ? 'No alerts match the current filters' + (unackedOnly ? ' (pending acknowledgment)' : '') + '.' : 'No alerts' + (unackedOnly ? ' pending acknowledgment' : '') + ' yet — the feed will fill in live as ANPR reads watchlisted plates.')
+            + '</div>';
+        return;
+    }
+    listEl.innerHTML = rows.map(a => {
+        const isAcked = acked.has(a.id) || !!a.acknowledged_at;
+        const sev = (a.severity || 'low').toLowerCase();
+        const isNew = firstRenderDone && !seenIds.has(a.id) ? ' al-new' : '';
+        seenIds.add(a.id);
+        return '<div class="al-row al-' + sev + isNew + (isAcked ? ' al-acked' : '') + '" id="al-' + a.id + '">'
+            + '<span class="al-sev al-sev--' + sev + '">' + sev + '</span>'
+            + '<span class="al-plate">' + esc(a.detected_plate || '—') + '</span>'
+            + '<div class="al-body">'
+            + '<div class="al-cat">' + esc(a.category || 'watchlist match') + '</div>'
+            + '<div class="al-desc">' + esc(a.description || '') + '</div>'
+            + '<div class="al-meta">' + esc(a.camera_name || 'Unknown camera') + ' · ' + fmtRelative(a.created_at) + ' · ' + fmtTime(a.created_at) + '</div>'
+            + '</div>'
+            + '<button class="al-ack" data-id="' + a.id + '"' + (isAcked ? ' disabled>✓ Acked' : '>Acknowledge</button>') + '</div>';
+    }).join('');
+    listEl.querySelectorAll('.al-ack:not([disabled])').forEach(btn => {
+        btn.addEventListener('click', () => ackAlert(btn.dataset.id, btn));
+    });
+}
+
+async function ackAlert(id, btn) {
+    btn.disabled = true; btn.textContent = '…';
+    try {
+        const res = await fetch('/api/v1/alerts/' + id + '/ack', { method: 'PATCH' });
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        acked.add(id);
+        btn.textContent = '✓ Acked';
+        const st = await (await fetch('/api/v1/alerts/stats')).json();
+        if (st.stats) stUnacked.textContent = st.stats.unacked ?? '—';
+        render();
+    } catch (err) {
+        btn.disabled = false; btn.textContent = 'Acknowledge';
+        alert('Ack failed: ' + err.message);
+    }
+}
+
+function liveAlert(a) {
+    a.detected_plate = a.plate || a.detected_plate;
+    a.created_at = a.created_at || new Date().toISOString();
+    ALERTS.unshift(a);
+    render();
+    try { showWatchlistAlert(a); } catch (_) {}
+}
+
+const ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws/detections');
+ws.onopen = () => { document.getElementById('wsDot').classList.add('ws-dot--on'); wsText.textContent = 'Live'; };
+ws.onclose = () => { wsText.textContent = 'Offline'; };
+ws.onmessage = ({ data }) => {
+    try {
+        const msg = JSON.parse(data);
+        if (msg.type === 'WATCHLIST_ALERT') liveAlert(msg.data && msg.data.alert ? msg.data.alert : msg.data);
+    } catch (_) {}
+};
+document.getElementById('unackedOnly').addEventListener('change', render);
+document.getElementById('searchInput').addEventListener('input', render);
+document.getElementById('sevFilter').addEventListener('change', render);
+
+loadAlerts();
+</script>
+{% endblock %}
