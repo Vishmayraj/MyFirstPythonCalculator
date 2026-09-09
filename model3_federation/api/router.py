@@ -35,6 +35,7 @@ from shared.db.models import User as UserModel
 from shared.db.session import get_db
 from model3_federation.bus.event_bus import FederationEventBus
 from model3_federation.correlation.engine import CorrelationEngine
+from model3_federation.registration import register_adapter
 from model3_federation.adapters.police_vms_adapter import PoliceVMSAdapter
 from model3_federation.adapters.rto_vms_adapter import RTOVMSAdapter
 from model3_federation.adapters.municipal_vms_adapter import MunicipalVMSAdapter
@@ -49,6 +50,7 @@ router = APIRouter(prefix="/api/v3", tags=["federation"])
 _bus: Optional[FederationEventBus] = None
 _engine: Optional[CorrelationEngine] = None
 _adapters: list = []
+_tasks: list[asyncio.Task] = []
 
 # WebSocket connection registry: set of active WebSocket clients
 _ws_clients: set[WebSocket] = set()
@@ -84,15 +86,32 @@ def _record_event_rate(system_id: str) -> None:
 
 # ── Federation lifecycle ─────────────────────────────────────────────────────
 
-async def start_federation_services(db_session_factory) -> None:
+def _on_task_done(task: asyncio.Task) -> None:
+    """
+    Log a background task's failure without touching its siblings.
+    Each adapter and the correlation engine run as independent
+    fire-and-forget tasks — one dying (e.g. a single bad VMS adapter)
+    should not take down the others.
+    """
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None:
+        logger.error("Federation task %r crashed: %s", task.get_name(), exc, exc_info=exc)
+
+
+async def start_federation_services(db_session_factory, redis_url: str) -> None:
     """
     Called from model1-registry/app/main.py lifespan on startup.
-    Initialises the event bus, correlation engine, and all three VMS adapters.
+    Initialises the event bus, correlation engine, and all three VMS adapters,
+    registers each adapter's reported system/camera inventory into the DB,
+    then starts each as its own independent background task and returns —
+    it does not block waiting on them. Call stop_federation_services() on
+    shutdown to cancel everything cleanly.
     """
-    global _bus, _engine, _adapters
+    global _bus, _engine, _adapters, _tasks
 
-    from model1_config import REDIS_URL  # type: ignore — injected by main.py
-    _bus = FederationEventBus(redis_url=REDIS_URL)
+    _bus = FederationEventBus(redis_url=redis_url)
 
     # Wrap bus publish to also track event rate per system
     _original_publish = _bus.publish
@@ -110,29 +129,46 @@ async def start_federation_services(db_session_factory) -> None:
     )
 
     _adapters = [PoliceVMSAdapter(), RTOVMSAdapter(), MunicipalVMSAdapter()]
+    _tasks = []
 
-    # Start correlation engine subscriber + adapter streams, and keep this coroutine alive
-    # so the lifespan hook can cancel everything cleanly on shutdown.
-    tasks: list[asyncio.Task] = [asyncio.create_task(_engine.start(), name="federation-engine")]
+    engine_task = asyncio.create_task(_engine.start(), name="federation-engine")
+    engine_task.add_done_callback(_on_task_done)
+    _tasks.append(engine_task)
 
-    # Connect and start each adapter's event stream
+    # Connect, register, and start each adapter's event stream independently.
     for adapter in _adapters:
         connected = await adapter.connect()
-        if connected:
-            tasks.append(asyncio.create_task(
-                adapter.start_event_stream(_bus.publish),
-                name=f"federation-adapter-{adapter.vendor}",
-            ))
-            logger.info("Adapter started: %s", adapter.system_name)
-        else:
+        if not connected:
             logger.error("Adapter failed to connect: %s", adapter.system_name)
+            continue
+
+        await register_adapter(db_session_factory, adapter)
+
+        task = asyncio.create_task(
+            adapter.start_event_stream(_bus.publish),
+            name=f"federation-adapter-{adapter.vendor}",
+        )
+        task.add_done_callback(_on_task_done)
+        _tasks.append(task)
+        logger.info("Adapter started: %s", adapter.system_name)
 
     logger.info("Model 3 Federation services started. %d adapters running.", len(_adapters))
-    try:
-        await asyncio.gather(*tasks)
-    finally:
-        for t in tasks:
-            t.cancel()
+
+
+async def stop_federation_services() -> None:
+    """Cancel all federation background tasks. Called from main.py lifespan on shutdown."""
+    global _tasks
+    for task in _tasks:
+        task.cancel()
+    for task in _tasks:
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        except Exception:
+            # Already logged by _on_task_done; swallow here so shutdown proceeds.
+            pass
+    _tasks = []
 
 
 # ── WebSocket endpoint ───────────────────────────────────────────────────────
