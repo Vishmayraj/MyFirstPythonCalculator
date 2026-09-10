@@ -28,11 +28,17 @@ logger = logging.getLogger("sentinel.runner")
 logger.setLevel(logging.INFO)
 
 import os
+from urllib.parse import quote
 
 user = os.getenv("GRID_RTSP_USER", "")
 passwd = os.getenv("GRID_RTSP_PASS", "")
 host = os.getenv("GRID_RTSP_HOST", "103.250.160.189")
-auth = f"{user}:{passwd}@" if user and passwd else ""
+if user and passwd:
+    user_enc = quote(user, safe="")
+    pass_enc = quote(passwd, safe="")
+    auth = f"{user_enc}:{pass_enc}@"
+else:
+    auth = ""
 
 # ── Camera configuration ───────────────────────────────────────────
 CAMERAS = [
