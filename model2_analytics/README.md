@@ -88,6 +88,33 @@ Full specification: `Project_Context.md` §4 and `HackathonPortal.md`.
   - `DELETE /api/v1/watchlist/persons/{id}` — Remove person and clean up stored reference portrait
   - `GET /api/v1/watchlist/persons/photos/{filename}` — Protected reference photo retrieval with path traversal defense
 
+### 6. Surveillance Video Face Detection & Watchlist Matching (`/face-detection`)
+- **Web UI Portal**: Dedicated analytics dashboard at `http://localhost:8000/face-detection`
+- **Decoupled 2-Layer AI Architecture**:
+  - Engineered with a generic, decoupled face recognition core (`FaceMatchEngine`) accepting raw BGR frames.
+  - Runs identically for uploaded pre-recorded surveillance videos or live continuous RTSP camera streams.
+- **AI Processing Pipeline**:
+  - **Face Detection**: Fast OpenCV YuNet neural network detecting faces and 5 canonical facial landmarks (eyes, nose, mouth corners) even with partial occlusion and low lighting.
+  - **Affine Alignment & Preprocessing**: Aligns face based on eye coordinates and standardizes to 160×160 RGB tensors.
+  - **Feature Extraction**: Deep 512-dimensional unit-normalized embeddings extracted via InceptionResnetV1.
+  - **Vector Similarity Search**: Instant sub-millisecond 1:N watchlist matching against `persons_watchlist` using PostgreSQL `pgvector` HNSW cosine distance (`<=>`).
+- **Asynchronous Execution & Playback Controls**:
+  - Runs on a dedicated background worker (`FaceVideoWorker`) with pause, resume, stop, and speed scaling controls (`1x Real-Time`, `2x Fast Scan`, `Max ⚡`).
+  - Native video metadata probing (resolution, native FPS, frame count, duration) via OpenCV.
+- **Real-Time Streaming & Alerts**:
+  - WebSocket push streaming live JPEG frames, bounding boxes (color-coded: Emerald green for detected faces, Amber/Red for watchlist matches), match identity, similarity percentage, and cosine distance.
+  - Instant insertion into `person_alerts` table in PostgreSQL with cropped face thumbnails saved to disk.
+  - Web Audio API tone alert and live alert audit feed in the UI.
+- **REST & WebSocket Endpoints** (`app/routers/face_detection.py`):
+  - `GET /api/v1/face-detection/active-jobs` — List all ongoing and ready face processing jobs
+  - `POST /api/v1/face-detection/upload` — Upload surveillance footage (.mp4, .avi, .mov, .mkv, .webm) with 2 GB limit
+  - `POST /api/v1/face-detection/start` — Launch isolated face video worker
+  - `POST /api/v1/face-detection/pause`, `/resume`, `/stop` — Real-time execution controls
+  - `GET /api/v1/face-detection/status/{job_id}` — Query current processing status, face count, and match count
+  - `GET /api/v1/face-detection/alerts` — Paginated person watchlist alerts with similarity scores and timestamps
+  - `GET /api/v1/face-detection/crops/{filename}` — Authenticated serving of detected face match crop thumbnails
+  - `WS /api/v1/face-detection/ws/{job_id}` — Real-time WebSocket channel streaming `VIDEO_FRAME`, `FACE_BOXES`, `PERSON_MATCH`, `JOB_PROGRESS`, and `JOB_DONE`
+
 ---
 
 ## 📡 Live Stream Architecture
@@ -162,6 +189,7 @@ for frame, pts_ms in client.read_frames():
 | `vehicle_tracks` | Cross-camera global vehicle identities |
 | `detections` | Individual sightings with camera timestamp and confidence |
 | `alerts` | Real-time alerts on watchlist match with severity grading |
+| `person_alerts` | Biometric facial watchlist match alerts with cosine distance and crop paths |
 
 ---
 
@@ -175,9 +203,12 @@ model2_analytics/
 │       ├── watchlist.py        # Vehicle Watchlist REST API: /api/v1/watchlist/vehicles
 │       ├── persons_watchlist.py# Person Watchlist & Face Recognition API: /api/v1/watchlist/persons
 │       ├── detections.py       # Live AI Detections REST & WebSocket API: /ws/detections
-│       └── recorded.py         # Pre-Recorded Video Upload & Controls: /ws/recorded/{id}
+│       ├── recorded.py         # Pre-Recorded Vehicle Video Upload & Controls: /ws/recorded/{id}
+│       └── face_detection.py   # Surveillance Face Detection & Alerting API: /face-detection, /ws/{id}
 ├── uploads/                    # Storage directory for user-uploaded video footage (.mp4, .avi, etc.)
-│   └── persons/                # Storage for reference face portraits
+│   ├── persons/                # Storage for reference face portraits
+│   ├── videos/                 # Storage for uploaded surveillance video footage
+│   └── face_matches/           # Cropped facial match images for triggered person alerts
 ├── detection-image/            # Persisted cropped vehicle thumbnails for audit & ANPR
 └── pipeline/
     ├── ingest.py               # RTSP StreamIngestClient — optimized zero-latency frame reader
@@ -187,7 +218,8 @@ model2_analytics/
     ├── plate/                  # Plate recognizer interface & Indian plate format regex
     ├── ocr/                    # OCR engine & text extraction
     ├── tracking/               # InFrameTracker (IoU + proximity) & cross-camera associator
-    └── faceembedding/          # Face quality checker (YuNet ONNX) & InceptionResnetV1 512-d encoder
+    ├── faceembedding/          # Face quality checker (YuNet ONNX) & InceptionResnetV1 512-d encoder
+    └── face_detection/         # Generic FaceMatchEngine (YuNet + pgvector) & FaceVideoWorker
 ```
 
 ---
@@ -198,5 +230,6 @@ model2_analytics/
 2. **Smooth Live Tracking**: Real-time IoU + centroid tracking with EMA bounding box smoothing and zero browser reflows.
 3. **Database Integration**: Automatic row insertion to PostgreSQL `detections` and `vehicle_tracks` with crop images stored on disk.
 4. **Isolated Pre-Recorded Pipeline**: On-demand video analysis running in separate threads with pause, resume, stop, and speed rate controls without affecting live camera streams.
-5. **Person Watchlist & Face Recognition**: Automated 5-gate facial quality screening, 512-d vector embedding extraction, and pgvector cosine similarity matching.
+5. **Person Watchlist & Biometrics**: Automated 5-gate facial quality screening, 512-d vector embedding extraction, and pgvector cosine similarity matching.
+6. **Surveillance Face Matching & Alerting**: Real-time 2-layer decoupled face detection & HNSW cosine distance search with synchronized WebSocket video streaming and audio-visual alerts.
 

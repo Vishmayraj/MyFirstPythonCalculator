@@ -101,11 +101,29 @@ Owner: `model2_analytics`. Data model reference: `Project_Context.md` §4.
 | `PATCH /api/v1/watchlist/persons/{id}` | Update person record details or toggle status (`active`/`resolved`) | ✅ |
 | `DELETE /api/v1/watchlist/persons/{id}` | Permanently delete person target and remove reference portrait from disk | ✅ |
 | `GET /api/v1/watchlist/persons/photos/{photo_filename}` | Authenticated serving of reference face portrait | ✅ |
-| `GET /api/v1/detections` | List detections, filterable by camera/plate/time range | 🚧 |
+| `GET /recorded-detection` | Pre-Recorded Video AI Vehicle Detection Dashboard UI | ✅ |
+| `GET /api/v1/recorded/cameras` | List active cameras for footage location association | ✅ |
+| `POST /api/v1/recorded/upload` | Upload surveillance footage (up to 2 GB) with OpenCV metadata probing | ✅ |
+| `POST /api/v1/recorded/start` | Start background vehicle detection & tracking worker (1x, 2x, max speed) | ✅ |
+| `POST /api/v1/recorded/pause` / `resume` / `stop` | Real-time playback and execution controls for vehicle analysis worker | ✅ |
+| `GET /api/v1/recorded/status/{job_id}` | Query current job status, total frames, detections count, and processing FPS | ✅ |
+| `WS /ws/recorded/{job_id}` | Real-time WebSocket channel streaming `VIDEO_FRAME`, `FRAME_BOXES`, `NEW_DETECTION`, `JOB_PROGRESS` | ✅ |
+| `GET /face-detection` | Surveillance Video Face Detection & Watchlist Alerting Dashboard UI | ✅ |
+| `GET /api/v1/face-detection/active-jobs` | List all active and uploaded face analysis jobs | ✅ |
+| `POST /api/v1/face-detection/upload` | Upload surveillance footage (up to 2 GB) with OpenCV metadata probing | ✅ |
+| `POST /api/v1/face-detection/start` | Start isolated face detection & watchlist matching worker (1x, 2x, max speed) | ✅ |
+| `POST /api/v1/face-detection/pause` / `resume` / `stop` | Execution controls for face analysis worker | ✅ |
+| `GET /api/v1/face-detection/status/{job_id}` | Query current face job status, total frames, face count, and match count | ✅ |
+| `GET /api/v1/face-detection/alerts` | Paginated person watchlist match alerts with similarity scores and timestamps | ✅ |
+| `GET /api/v1/face-detection/crops/{filename}` | Authenticated serving of detected face match crop thumbnails | ✅ |
+| `WS /api/v1/face-detection/ws/{job_id}` | Real-time WebSocket channel streaming `VIDEO_FRAME`, `FACE_BOXES`, `PERSON_MATCH`, `JOB_PROGRESS` | ✅ |
+| `GET /detection-image/{file_path}` | Authenticated serving of vehicle/plate cropped detection images | ✅ |
+| `GET /api/v1/detections` | List detections, filterable by camera/plate/time range | ✅ |
 | `GET /api/v1/vehicle-tracks/{plate_number}` | Full route reconstruction for a plate — **this is the Step 4 scored test** | 🚧 |
 | `GET /api/v1/alerts` | List alerts, filter by acknowledged/severity | 🚧 |
 | `POST /api/v1/alerts/{id}/acknowledge` | Ack an alert — writes `acknowledged_by`/`acknowledged_at` | 🚧 |
 | `WS /api/v1/ws/alerts` | Real-time alert push to dashboard on watchlist match | 🚧 |
+| `WS /ws/detections` | Real-time live RTSP camera vehicle detections and track stream | ✅ |
 
 ### Vehicle Watchlist object (`shared/schemas/watchlist.py`)
 
@@ -199,9 +217,45 @@ Returned on `GET` and `POST` endpoints:
 }
 ```
 
-`vehicle_tracks` (plate_number, first_seen, last_seen) is a derived
-query over `detections.vehicle_track_id`, not a separately-written table
-— see `Project_Context.md` §4.
+### Person Alert object (`person_alerts` table in PostgreSQL)
+
+Created when a face detected in pre-recorded or live surveillance footage matches an active entry in `persons_watchlist` with cosine distance $\le 0.30$ (similarity $\ge 0.70$).
+
+```json
+{
+  "id": "uuid",
+  "person_id": "uuid",
+  "person_name": "string",
+  "category": "wanted | missing | suspect",
+  "camera_id": "string (e.g. 'prerecorded' or camera UUID)",
+  "similarity_score": 0.8421,
+  "distance": 0.1579,
+  "face_crop_path": "/api/v1/face-detection/crops/{alert_id}.jpg",
+  "reference_photo_path": "/api/v1/watchlist/persons/photos/{person_id}.jpg",
+  "frame_timestamp": "datetime",
+  "created_at": "datetime"
+}
+```
+
+### WebSocket Streaming Channels
+
+#### 1. Live RTSP Vehicle Detections (`/ws/detections`)
+- `FRAME_BOXES`: Streaming tracking bounding boxes `[{ track_id, bbox: [x1, y1, x2, y2], class_name, confidence }]`
+- `NEW_DETECTION`: Confirmed vehicle sighting persisted in DB with plate OCR and crop path.
+
+#### 2. Pre-Recorded Vehicle Video Stream (`/ws/recorded/{job_id}`)
+- `VIDEO_FRAME`: `jpeg_b64` frame bytes, `frame_n`, `total_frames`, `pts_ms`
+- `FRAME_BOXES`: Real-time tracking boxes for active vehicle tracks
+- `NEW_DETECTION`: Confirmed sightings with vehicle class and crop
+- `JOB_PROGRESS`: Current frame, processing FPS, percentage complete
+- `JOB_DONE`: Completion event with total processed frames and detection totals
+
+#### 3. Surveillance Video Face Detection Stream (`/api/v1/face-detection/ws/{job_id}`)
+- `VIDEO_FRAME`: Streaming `jpeg_b64` frame with frame index and total frames
+- `FACE_BOXES`: Real-time face bounding boxes, confidence score, and match status
+- `PERSON_MATCH`: Instant alert event containing `person_id`, `name`, `category`, `similarity_score`, `distance`, and `crop_url`
+- `JOB_PROGRESS`: Real-time processing FPS, total faces, total matches, percentage complete
+- `JOB_DONE`: Final completion payload with total faces and watchlist hits
 
 ### WebSocket contract — `/api/v1/ws/alerts` 🚧
 
