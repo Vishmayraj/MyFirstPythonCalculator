@@ -185,3 +185,19 @@ CREATE TABLE alerts (
 );
 CREATE INDEX idx_alerts_watchlist ON alerts (watchlist_id);
 CREATE INDEX idx_alerts_created ON alerts (created_at DESC);
+
+-- Person Alerts — generated on face watchlist match
+CREATE TABLE person_alerts (
+    id                 UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    person_id          UUID NOT NULL REFERENCES persons_watchlist(id) ON DELETE CASCADE,
+    camera_id          TEXT DEFAULT 'prerecorded',
+    similarity_score   REAL NOT NULL,
+    distance           REAL NOT NULL,
+    face_crop_path     TEXT,
+    frame_timestamp    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+    acknowledged_by    UUID REFERENCES users(id) ON DELETE SET NULL,
+    acknowledged_at    TIMESTAMPTZ
+);
+CREATE INDEX idx_person_alerts_person ON person_alerts (person_id);
+CREATE INDEX idx_person_alerts_created ON person_alerts (created_at DESC);
