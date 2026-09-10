@@ -446,6 +446,32 @@ def persons_watchlist_page(
     )
 
 
+@router.get("/face-detection", response_class=HTMLResponse)
+def face_detection_page(
+    request: Request,
+    user: Optional[UserModel] = Depends(get_optional_current_user),
+    db: Session = Depends(get_db),
+):
+    """Face Detection & Person Watchlist Surveillance Page."""
+    if not user:
+        return RedirectResponse(url="/login", status_code=302)
+
+    cams = (
+        db.query(CameraModel)
+        .filter(CameraModel.is_active == True)
+        .order_by(CameraModel.name)
+        .all()
+    )
+    return request.app.state.templates.TemplateResponse(
+        request=request,
+        name="face_detection.html",
+        context={
+            "user": user,
+            "cameras": cams,
+        },
+    )
+
+
 @router.get("/alerts", response_class=HTMLResponse)
 def alerts_placeholder(
     request: Request,
