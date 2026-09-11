@@ -1,0 +1,232 @@
+{% extends "base.html" %}
+{% block title %}Sentinel — Watchlist Alerts{% endblock %}
+
+{% block content %}
+<div class="page-container" style="max-width: 1380px; margin: 0 auto; padding: 2rem 1.5rem;">
+    <!-- Header -->
+    <div class="page-header" style="margin-bottom: 2rem; display: flex; align-items: flex-start; justify-content: space-between; flex-wrap: wrap; gap: 1rem;">
+        <div>
+            <h1 class="page-title" style="font-size: 1.75rem; font-weight: 800; color: var(--text-primary); letter-spacing: -0.02em;">
+                🚨 Watchlist Alerts
+            </h1>
+            <p style="color: var(--text-secondary); font-size: 0.95rem; margin-top: 0.35rem;">
+                Real-time alerts generated when the ANPR pipeline reads a watchlisted plate.
+            </p>
+        </div>
+        <span class="ws-pill"><span class="ws-dot" id="wsDot"></span> <span id="wsText">Connecting…</span></span>
+    </div>
+
+    <!-- Stat tiles -->
+    <div class="stats-grid-alerts">
+        <div class="stat-tile">
+            <div class="stat-tile-label">Total Alerts</div>
+            <div class="stat-tile-value" id="stTotal">—</div>
+        </div>
+        <div class="stat-tile stat-tile--today">
+            <div class="stat-tile-label">Today</div>
+            <div class="stat-tile-value" id="stToday">—</div>
+        </div>
+        <div class="stat-tile stat-tile--unacked">
+            <div class="stat-tile-label">Unacknowledged</div>
+            <div class="stat-tile-value" id="stUnacked">—</div>
+        </div>
+        <div class="stat-tile stat-tile--critical">
+            <div class="stat-tile-label">Critical</div>
+            <div class="stat-tile-value" id="stCritical">—</div>
+        </div>
+        <div class="stat-tile stat-tile--high">
+            <div class="stat-tile-label">High</div>
+            <div class="stat-tile-value" id="stHigh">—</div>
+        </div>
+    </div>
+
+    <!-- Alert Feed -->
+    <div class="card" style="border-radius: var(--radius-lg); overflow: hidden;">
+        <div class="alerts-toolbar">
+            <input type="text" id="searchInput" class="form-input" placeholder="Search plate, category or camera…" style="flex:1; min-width:180px;">
+            <select id="sevFilter" class="form-select" style="max-width:160px;">
+                <option value="">All severities</option>
+                <option value="critical">Critical</option>
+                <option value="high">High</option>
+                <option value="medium">Medium</option>
+                <option value="low">Low</option>
+            </select>
+            <label style="display:flex;align-items:center;gap:.45rem;font-size:.8rem;color:var(--text-secondary);cursor:pointer;white-space:nowrap;">
+                <input type="checkbox" id="unackedOnly" style="accent-color:var(--accent);"> Unacknowledged only
+            </label>
+            <span class="feed-count" id="feedCount"></span>
+        </div>
+        <div id="alertList" style="padding:1.1rem;">
+            <div class="al-empty"><span class="al-empty-icon">🔍</span>Loading alerts…</div>
+        </div>
+{% block head_extra %}
+<style>
+.stats-grid-alerts{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:1.25rem;margin-bottom:1.75rem;}
+.stat-tile{background:rgba(17,24,39,0.7);border:1px solid rgba(255,255,255,0.08);border-radius:var(--radius-lg);padding:1.4rem;}
+.stat-tile-label{font-size:.8rem;color:var(--text-secondary);font-weight:600;text-transform:uppercase;letter-spacing:.05em;}
+.stat-tile-value{font-size:2rem;font-weight:800;color:var(--text-primary);margin-top:.3rem;}
+.stat-tile--today .stat-tile-value{color:#38bdf8;}
+.stat-tile--unacked .stat-tile-value{color:#fbbf24;}
+.stat-tile--critical .stat-tile-value{color:#f87171;}
+.stat-tile--high .stat-tile-value{color:#fb923c;}
+.alerts-toolbar{display:flex;gap:.75rem;padding:1rem 1.1rem;background:rgba(17,24,39,0.5);border-bottom:1px solid var(--border-subtle);align-items:center;flex-wrap:wrap;}
+.feed-count{font-size:.75rem;color:var(--text-secondary);margin-left:auto;}
+#alertList{max-height:600px;overflow-y:auto;}
+.al-empty{text-align:center;padding:3rem 1rem;color:var(--text-secondary);}
+.al-empty-icon{font-size:2rem;display:block;margin-bottom:.5rem;}
+.al-row{display:flex;align-items:stretch;gap:.75rem;padding:1rem;margin-bottom:.5rem;border-radius:var(--radius-md);background:rgba(17,24,39,0.5);border:1px solid var(--border-subtle);border-left:4px solid var(--border-subtle);}
+.al-critical{border-left-color:#f87171;}
+.al-high{border-left-color:#fb923c;}
+.al-medium{border-left-color:#fbbf24;}
+.al-low{border-left-color:#94a3b8;}
+.al-acked{opacity:.5;}
+.al-sev{font-size:.7rem;font-weight:800;text-transform:uppercase;padding:.25rem .5rem;border-radius:4px;min-width:70px;text-align:center;}
+.al-sev--critical{background:rgba(239,68,68,.2);color:#f87171;}
+.al-sev--high{background:rgba(251,146,60,.2);color:#fb923c;}
+.al-sev--medium{background:rgba(251,191,36,.2);color:#fbbf24;}
+.al-sev--low{background:rgba(148,163,184,.2);color:#94a3b8;}
+.al-plate{font-family:monospace;font-weight:800;font-size:1.1rem;color:var(--text-primary);min-width:120px;}
+.al-body{flex:1;min-width:0;}
+.al-cat{font-weight:700;font-size:.85rem;color:var(--text-primary);}
+.al-desc{font-size:.8rem;color:var(--text-secondary);margin-top:.15rem;}
+.al-meta{font-size:.7rem;color:var(--text-secondary);margin-top:.3rem;}
+.al-ack{padding:.3rem .7rem;font-size:.75rem;font-weight:600;border-radius:6px;border:1px solid var(--border-subtle);background:transparent;color:var(--text-secondary);cursor:pointer;white-space:nowrap;}
+.al-ack:disabled{opacity:.5;cursor:default;}
+</style>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let ALERTS = [];
+const acked = new Set();
+const seenIds = new Set();
+let firstRenderDone = false;
+
+async function loadAlerts() {
+    try {
+        const res = await fetch('/api/v1/alerts?limit=200');
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const data = await res.json();
+        ALERTS = data.alerts || [];
+        render();
+        firstRenderDone = true;
+        const st = await (await fetch('/api/v1/alerts/stats')).json();
+        if (st.stats) {
+function render() {
+    const listEl = document.getElementById('alertList');
+    const q = (document.getElementById('searchInput').value || '').toLowerCase();
+    const sev = document.getElementById('sevFilter').value;
+    const unackedOnly = document.getElementById('unackedOnly').checked;
+
+    const rows = ALERTS.filter(a => {
+        if (sev && (a.severity || '') !== sev) return false;
+        if (unackedOnly && (a.acknowledged_at || acked.has(a.id))) return false;
+        if (q) {
+            const hay = ((a.detected_plate || '') + ' ' + (a.category || '') + ' ' + (a.description || '') + ' ' + (a.camera_name || '')).toLowerCase();
+            if (!hay.includes(q)) return false;
+        }
+        return true;
+    });
+
+    document.getElementById('feedCount').textContent = ALERTS.length
+        ? rows.length + ' of ' + ALERTS.length + ' alerts'
+        : '';
+
+    if (!rows.length) {
+        listEl.innerHTML = '<div class="al-empty"><span class="al-empty-icon">🔍</span>'
+            + (ALERTS.length ? 'No alerts match the current filters.' : 'No alerts yet — the feed will fill in live as ANPR reads watchlisted plates.')
+            + '</div>';
+        return;
+    }
+    listEl.innerHTML = rows.map(a => {
+        const isAcked = acked.has(a.id) || !!a.acknowledged_at;
+        const sev = (a.severity || 'low').toLowerCase();
+        const isNew = firstRenderDone && !seenIds.has(a.id) ? ' al-new' : '';
+        seenIds.add(a.id);
+        return '<div class="al-row al-' + sev + isNew + (isAcked ? ' al-acked' : '') + '" id="al-' + a.id + '">'
+            + '<span class="al-sev al-sev--' + sev + '">' + sev + '</span>'
+            + '<span class="al-plate">' + esc(a.detected_plate || '—') + '</span>'
+            + '<div class="al-body">'
+            + '<div class="al-cat">' + esc(a.category || 'watchlist match') + '</div>'
+            + '<div class="al-desc">' + esc(a.description || '') + '</div>'
+            + '<div class="al-meta">' + esc(a.camera_name || 'Unknown camera') + ' · ' + fmtRelative(a.created_at) + '</div>'
+            + '</div>'
+            + '<button class="al-ack" data-id="' + a.id + '"' + (isAcked ? ' disabled>✓ Acked' : '>Acknowledge</button>') + '</div>';
+    }).join('');
+    listEl.querySelectorAll('.al-ack:not([disabled])').forEach(btn => {
+        btn.addEventListener('click', () => ackAlert(btn.dataset.id, btn));
+    });
+}
+
+async function ackAlert(id, btn) {
+    btn.disabled = true; btn.textContent = '…';
+    try {
+        const res = await fetch('/api/v1/alerts/' + id + '/ack', { method: 'PATCH' });
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        acked.add(id);
+        btn.textContent = '✓ Acked';
+        const st = await (await fetch('/api/v1/alerts/stats')).json();
+        if (st.stats) stUnacked.textContent = st.stats.unacked ?? '—';
+        render();
+    } catch (err) {
+        btn.disabled = false; btn.textContent = 'Acknowledge';
+        alert('Ack failed: ' + err.message);
+    }
+}
+
+function liveAlert(a) {
+    a.detected_plate = a.plate || a.detected_plate;
+    a.created_at = a.created_at || new Date().toISOString();
+    ALERTS.unshift(a);
+    render();
+}
+
+const ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws/detections');
+ws.onopen = () => { document.getElementById('wsDot').classList.add('ws-dot--on'); wsText.textContent = 'Live'; };
+ws.onclose = () => { wsText.textContent = 'Offline'; };
+ws.onmessage = ({ data }) => {
+    try {
+        const msg = JSON.parse(data);
+        if (msg.type === 'WATCHLIST_ALERT') liveAlert(msg.data && msg.data.alert ? msg.data.alert : msg.data);
+    } catch (_) {}
+};
+document.getElementById('unackedOnly').addEventListener('change', render);
+document.getElementById('searchInput').addEventListener('input', render);
+document.getElementById('sevFilter').addEventListener('change', render);
+
+loadAlerts();
+</script>
+{% endblock %}
+            document.getElementById('stTotal').textContent = st.stats.total ?? '—';
+            document.getElementById('stToday').textContent = st.stats.today ?? '—';
+            document.getElementById('stUnacked').textContent = st.stats.unacked ?? '—';
+            document.getElementById('stCritical').textContent = st.stats.by_severity?.critical ?? '—';
+            document.getElementById('stHigh').textContent = st.stats.by_severity?.high ?? '—';
+        }
+    } catch (err) {
+        document.getElementById('alertList').innerHTML = '<div class="al-empty">Failed to load: ' + err.message + '</div>';
+    }
+}
+
+function esc(s) {
+    const d = document.createElement('div');
+    d.textContent = s || '';
+    return d.innerHTML;
+}
+
+function fmtTime(iso) {
+    if (!iso) return '';
+    return new Date(iso).toLocaleString();
+}
+
+function fmtRelative(iso) {
+    if (!iso) return '';
+    const s = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
+    if (s < 60) return s + 's ago';
+    if (s < 3600) return Math.floor(s / 60) + 'm ago';
+    if (s < 86400) return Math.floor(s / 3600) + 'h ago';
+    return Math.floor(s / 86400) + 'd ago';
+}
+    </div>
+</div>
+{% endblock %}

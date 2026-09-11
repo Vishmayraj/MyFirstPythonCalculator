@@ -19,7 +19,7 @@ services:
       POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:-sentinel_dev}"
       POSTGRES_DB: "${POSTGRES_DB:-sentinel}"
     ports:
-      - "5432:5432"
+      - "5433:5432"
     volumes:
       - sentinel_pgdata:/var/lib/postgresql/data
       # Postgres runs every *.sql/*.sh under docker-entrypoint-initdb.d

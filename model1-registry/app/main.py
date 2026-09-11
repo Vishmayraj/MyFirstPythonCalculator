@@ -32,6 +32,17 @@ local_repo_root = current_dir.parent.parent
 if (local_repo_root / "shared").exists() and str(local_repo_root) not in sys.path:
     sys.path.insert(0, str(local_repo_root))
 
+# Make bare `pipeline.*` imports (used by model2_analytics routers/pipeline,
+# e.g. recorded.py -> from pipeline.video_worker import PreRecordedVideoWorker)
+# resolvable outside Docker. Inside Docker the PYTHONPATH env var already
+# covers this (see infra/Dockerfile); locally/CI it doesn't, so without this
+# the Model 2 router auto-discovery loop below silently skips every router
+# file that does a bare `pipeline.*` import (caught by its try/except),
+# and those endpoints 404 instead of enforcing auth.
+_M2_LOCAL_DIR = local_repo_root / "model2_analytics"
+if _M2_LOCAL_DIR.exists() and str(_M2_LOCAL_DIR) not in sys.path:
+    sys.path.insert(0, str(_M2_LOCAL_DIR))
+
 from app.auth.dependencies import get_current_user  # noqa: E402
 from app.config import settings  # noqa: E402
 from app.routers import audit, auth, cameras, departments, districts, gap_analysis, pages, streams  # noqa: E402
