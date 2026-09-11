@@ -38,9 +38,12 @@ logger.setLevel(logging.INFO)
 router = APIRouter(tags=["recorded-detection"])
 
 # ── Upload directory resolution ──────────────────────────────────
-UPLOADS_DIR = Path("/app/model2_analytics/uploads")
-if not UPLOADS_DIR.exists():
-    UPLOADS_DIR = Path(__file__).resolve().parents[2] / "uploads"
+_UPLOADS_CANDIDATES = [
+    Path("/model2-analytics/uploads"),
+    Path("/app/model2_analytics/uploads"),
+    Path(__file__).resolve().parents[2] / "uploads",
+]
+UPLOADS_DIR = next((p for p in _UPLOADS_CANDIDATES if p.is_dir()), _UPLOADS_CANDIDATES[0])
 UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
 
 MAX_UPLOAD_SIZE = 2 * 1024 * 1024 * 1024  # 2 GB
@@ -56,6 +59,14 @@ _loop: Optional[asyncio.AbstractEventLoop] = None
 def _get_db():
     import shared.db.session as _s
     return _s._SessionLocal() if _s._SessionLocal else None
+
+
+def _capture_running_loop():
+    global _loop
+    try:
+        _loop = asyncio.get_running_loop()
+    except RuntimeError:
+        pass
 
 
 # ── Thread-safe event callback from PreRecordedVideoWorker ────────
@@ -133,6 +144,7 @@ async def upload_recorded_video(
     probes video metadata (duration, FPS, resolution, total frames),
     and initializes job record.
     """
+    _capture_running_loop()
     filename = file.filename or "upload.mp4"
     ext = Path(filename).suffix.lower()
     if ext not in ALLOWED_EXTENSIONS:
@@ -217,10 +229,11 @@ async def upload_recorded_video(
 
 # ── 3. Start Video Processing ─────────────────────────────────────
 @router.post("/api/v1/recorded/start")
-def start_recorded_job(
+async def start_recorded_job(
     req: JobControlRequest,
     current_user: UserModel = Depends(require_role("dept_admin", "operator")),
 ):
+    _capture_running_loop()
     job_id = req.job_id
     meta = _JOBS_META.get(job_id)
     if not meta:
@@ -249,10 +262,11 @@ def start_recorded_job(
 
 # ── 4. Pause Processing ───────────────────────────────────────────
 @router.post("/api/v1/recorded/pause")
-def pause_recorded_job(
+async def pause_recorded_job(
     req: JobControlRequest,
     current_user: UserModel = Depends(require_role("dept_admin", "operator")),
 ):
+    _capture_running_loop()
     worker = _JOBS.get(req.job_id)
     if not worker or not worker.is_running:
         raise HTTPException(status_code=400, detail="Job is not actively running")
@@ -263,10 +277,11 @@ def pause_recorded_job(
 
 # ── 5. Resume Processing ──────────────────────────────────────────
 @router.post("/api/v1/recorded/resume")
-def resume_recorded_job(
+async def resume_recorded_job(
     req: JobControlRequest,
     current_user: UserModel = Depends(require_role("dept_admin", "operator")),
 ):
+    _capture_running_loop()
     worker = _JOBS.get(req.job_id)
     if not worker:
         raise HTTPException(status_code=404, detail="Job worker not found")
@@ -275,12 +290,13 @@ def resume_recorded_job(
     return {"status": "ok", "job_id": req.job_id, "state": worker.state}
 
 
-# ── 6. Stop Processing ────────────────────────────────────────────
+# ── 6. Stop Processing ────────────────────────────────────
 @router.post("/api/v1/recorded/stop")
-def stop_recorded_job(
+async def stop_recorded_job(
     req: JobControlRequest,
     current_user: UserModel = Depends(require_role("dept_admin", "operator")),
 ):
+    _capture_running_loop()
     worker = _JOBS.get(req.job_id)
     if worker:
         worker.stop()
@@ -319,10 +335,43 @@ def get_recorded_job_status(
 async def ws_recorded_feed(
     websocket: WebSocket,
     job_id: str,
-    current_user: UserModel = Depends(get_current_user),
 ):
-    global _loop
-    _loop = asyncio.get_running_loop()
+    _capture_running_loop()
+
+    # Authenticate token safely from cookie, header, or query param without unhandled HTTPException
+    token = websocket.cookies.get("access_token")
+    if token and token.startswith("Bearer "):
+        token = token[7:]
+    if not token:
+        auth_header = websocket.headers.get("authorization")
+        if auth_header and auth_header.startswith("Bearer "):
+            token = auth_header[7:]
+    if not token:
+        token = websocket.query_params.get("token")
+        if token and token.startswith("Bearer "):
+            token = token[7:]
+
+    user = None
+    if token:
+        try:
+            from app.auth.security import decode_access_token
+            payload = decode_access_token(token)
+            if payload and "sub" in payload:
+                user_id = uuid.UUID(payload["sub"])
+                db = _get_db()
+                if db:
+                    try:
+                        user = db.query(UserModel).filter(UserModel.id == user_id, UserModel.is_active.is_(True)).first()
+                    finally:
+                        db.close()
+        except Exception as e:
+            logger.debug(f"Recorded WS auth error: {e}")
+            user = None
+
+    if not user:
+        logger.warning(f"[{job_id}] Unauthenticated WebSocket connection to /ws/recorded — rejecting cleanly.")
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Unauthorized")
+        return
 
     await websocket.accept()
     _JOB_WS[job_id].add(websocket)

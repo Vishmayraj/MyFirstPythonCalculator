@@ -11,9 +11,10 @@ Endpoints:
 import asyncio
 import json
 import logging
+import uuid
 from typing import Dict, List, Optional, Set
 
-from fastapi import APIRouter, Depends, Query, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, Query, WebSocket, WebSocketDisconnect, status
 from sqlalchemy import text
 
 from app.auth.dependencies import get_current_user, require_role
@@ -238,10 +239,44 @@ def detection_stats(current_user: UserModel = Depends(get_current_user)):
 @router.websocket("/ws/detections")
 async def ws_detections(
     websocket: WebSocket,
-    current_user: UserModel = Depends(get_current_user),
 ):
     global _loop
     _loop = asyncio.get_running_loop()
+
+    # Authenticate token safely from cookie or header without ASGI-crashing HTTPException
+    token = websocket.cookies.get("access_token")
+    if token and token.startswith("Bearer "):
+        token = token[7:]
+    if not token:
+        auth_header = websocket.headers.get("authorization")
+        if auth_header and auth_header.startswith("Bearer "):
+            token = auth_header[7:]
+    if not token:
+        token = websocket.query_params.get("token")
+        if token and token.startswith("Bearer "):
+            token = token[7:]
+
+    user = None
+    if token:
+        try:
+            from app.auth.security import decode_access_token
+            payload = decode_access_token(token)
+            if payload and "sub" in payload:
+                user_id = uuid.UUID(payload["sub"])
+                db = _get_db()
+                if db:
+                    try:
+                        user = db.query(UserModel).filter(UserModel.id == user_id, UserModel.is_active.is_(True)).first()
+                    finally:
+                        db.close()
+        except Exception as e:
+            logger.debug(f"WS auth error: {e}")
+            user = None
+
+    if not user:
+        logger.warning("Unauthenticated WebSocket connection to /ws/detections — rejecting cleanly.")
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Unauthorized")
+        return
 
     await websocket.accept()
     ACTIVE_WS.add(websocket)

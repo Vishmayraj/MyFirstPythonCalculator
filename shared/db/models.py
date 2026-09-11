@@ -359,3 +359,32 @@ class Alert(Base):
         Index("idx_alerts_created", text("created_at DESC")),
     )
 
+
+class PersonAlert(Base):
+    __tablename__ = "person_alerts"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    person_id = Column(
+        UUID(as_uuid=True), ForeignKey("persons_watchlist.id", ondelete="CASCADE"), nullable=False
+    )
+    camera_id = Column(
+        Text, nullable=True, default="prerecorded"
+    )
+    similarity_score = Column(REAL, nullable=False)
+    distance = Column(REAL, nullable=False)
+    face_crop_path = Column(Text)
+    frame_timestamp = Column(DateTime(timezone=True), nullable=False, server_default="now()")
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default="now()")
+    acknowledged_by = Column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL")
+    )
+    acknowledged_at = Column(DateTime(timezone=True))
+
+    person = relationship("PersonWatchlist", backref="person_alerts")
+    acknowledged_by_user = relationship("User")
+
+    __table_args__ = (
+        Index("idx_person_alerts_person", "person_id"),
+        Index("idx_person_alerts_created", text("created_at DESC")),
+    )
+

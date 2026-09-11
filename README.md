@@ -160,9 +160,18 @@ See `model1-registry/README.md`'s Testing section for details, including what to
 - `GET /api/v1/watchlist/vehicles/{id}` — Get single watchlist target detail
 - `PATCH /api/v1/watchlist/vehicles/{id}` — Update target case status (`active` / `resolved`) or details
 - `DELETE /api/v1/watchlist/vehicles/{id}` — Delete watchlist target and cascade associated alerts
-- `GET /watchlist/persons` — Person Watchlist & Facial Biometric Dashboard UI
+- `GET /detection-image/{file_path}` — Authenticated serving of vehicle/plate cropped detection images
+- `GET /face-detection` — Surveillance Video Face Detection & Watchlist Alerting Dashboard UI
+- `GET /api/v1/face-detection/active-jobs` — List all ongoing and ready face processing jobs
+- `POST /api/v1/face-detection/upload` — Upload surveillance footage (up to 2 GB) with OpenCV metadata probing
+- `POST /api/v1/face-detection/start` — Start background face detection & watchlist matching worker (1x, 2x, max speed)
+- `POST /api/v1/face-detection/pause` / `resume` / `stop` — Execution controls for face analysis worker
+- `GET /api/v1/face-detection/status/{job_id}` — Query face processing status, detected face counts, and watchlist hits
+- `GET /api/v1/face-detection/alerts` — Paginated person watchlist match alerts with confidence scores and distance metrics
+- `GET /api/v1/face-detection/crops/{filename}` — Authenticated serving of detected face match crop thumbnails
+- `WS /api/v1/face-detection/ws/{job_id}` — Real-time WebSocket channel streaming frames, face bounding boxes, and instant watchlist match alerts
 - `GET /api/v1/watchlist/persons` — List & filter person targets (filter by `category`, `status`, `name`)
-- `POST /api/v1/watchlist/persons` — Register person target with 5-gate AI quality validation (YuNet + solvePnP 3D pose) and 512-d InceptionResnetV1 embedding in `pgvector`
+- `POST /api/v1/watchlist/persons` — Register person target with 5-gate AI quality validation (YuNet + solvePnP 3D pose), 10 MB photo limit, and 512-d InceptionResnetV1 embedding in `pgvector`
 - `GET /api/v1/watchlist/persons/{id}` — Get single person watchlist target detail
 - `PATCH /api/v1/watchlist/persons/{id}` — Update person details or toggle status (`active` / `resolved`)
 - `DELETE /api/v1/watchlist/persons/{id}` — Remove person target and disk reference photo

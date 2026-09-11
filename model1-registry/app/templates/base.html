@@ -76,6 +76,9 @@
                 <a href="/watchlist/persons" class="nav-link nav-link--secondary {% if '/watchlist/persons' in request.url.path %}active{% endif %}" id="nav-person-watchlist">
                     <span class="nav-link-icon">👤</span> Person Watchlist
                 </a>
+                <a href="/face-detection" class="nav-link nav-link--secondary {% if request.url.path == '/face-detection' %}active{% endif %}" id="nav-face-detection">
+                    <span class="nav-link-icon">🎯</span> Face Detection
+                </a>
                 <a href="/anpr" class="nav-link nav-link--secondary {% if request.url.path == '/anpr' %}active{% endif %}" id="nav-anpr">
                     <span class="nav-link-icon">🚗</span> ANPR
                 </a>

@@ -20,3 +20,4 @@ pydantic==2.9.0
 # is installed into the app container; pipeline/requirements.txt is for
 # offline training only). See AuditReport2.md finding 7.
 facenet-pytorch==2.6.0
+ultralytics>=8.2.0
