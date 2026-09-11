@@ -127,6 +127,42 @@ class ANPRVideoProcessor:
         out = cv2.VideoWriter(self.output_path, fourcc, fps // self.process_stride, (width, height))
 
         frame_idx = 0
+        stats = {"vehicles": 0, "plates": 0, "ocr_reads": 0, "watchlist_hits": 0}
+
+        try:
+            while True:
+                ret, frame = cap.read()
+                if not ret:
+                    break
+
+                frame_idx += 1
+                if self.max_frames and frame_idx > self.max_frames:
+                    break
+                if (frame_idx - 1) % self.process_stride != 0:
+                    continue
+
+                annotated, fstats = self._process_frame(frame, frame_idx)
+                out.write(annotated)
+
+                stats["vehicles"]     += fstats["vehicles"]
+                stats["plates"]       += fstats["plates"]
+                stats["ocr_reads"]    += fstats["ocr_reads"]
+                stats["watchlist_hits"] += fstats["watchlist_hits"]
+
+                if frame_idx % 100 == 0:
+                    logger.info(f"Frame {frame_idx}: {fstats}")
+
+        finally:
+            cap.release()
+            out.release()
+
+        # Write CSV
+        csv_path = Path(self.output_path).with_suffix(".csv")
+        self._write_csv(str(csv_path))
+
+        logger.info(f"Done. Stats: {stats}")
+        return self.output_path
+
     # ── Per-frame processing ──
     def _process_frame(self, frame, frame_idx: int):
         import cv2
@@ -224,38 +260,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-        stats = {"vehicles": 0, "plates": 0, "ocr_reads": 0, "watchlist_hits": 0}
-
-        try:
-            while True:
-                ret, frame = cap.read()
-                if not ret:
-                    break
-
-                frame_idx += 1
-                if self.max_frames and frame_idx > self.max_frames:
-                    break
-                if (frame_idx - 1) % self.process_stride != 0:
-                    continue
-
-                annotated, fstats = self._process_frame(frame, frame_idx)
-                out.write(annotated)
-
-                stats["vehicles"]     += fstats["vehicles"]
-                stats["plates"]       += fstats["plates"]
-                stats["ocr_reads"]    += fstats["ocr_reads"]
-                stats["watchlist_hits"] += fstats["watchlist_hits"]
-
-                if frame_idx % 100 == 0:
-                    logger.info(f"Frame {frame_idx}: {fstats}")
-
-        finally:
-            cap.release()
-            out.release()
-
-        # Write CSV
-        csv_path = Path(self.output_path).with_suffix(".csv")
-        self._write_csv(str(csv_path))
-
-        logger.info(f"Done. Stats: {stats}")
-        return self.output_path

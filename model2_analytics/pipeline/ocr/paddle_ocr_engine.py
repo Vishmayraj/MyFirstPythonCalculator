@@ -127,6 +127,10 @@ class PaddleOCREngine:
         if self._easy_reader is None:
             self._lazy_load_easy()
         if self._easy_reader:
+            return self._read_with_easy(crop)
+
+        return None
+
     def _read_with_paddle(self, crop) -> Optional[OCRResult]:
         """Read using PaddleOCR."""
         try:
@@ -218,6 +222,3 @@ class PaddleOCREngine:
         except Exception as e:
             logger.warning(f"EasyOCR read failed: {e}")
             return None
-            return self._read_with_easy(crop)
-
-        return None

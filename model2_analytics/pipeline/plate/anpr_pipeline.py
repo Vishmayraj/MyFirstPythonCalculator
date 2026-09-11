@@ -67,6 +67,14 @@ class ANPRPipeline(PlateRecognizerInterface):
         self,
         plate_detector: Optional[PlateDetector] = None,
         ocr_engine: Optional[OCREngineProtocol] = None,
+        conf_threshold: float = 0.20,  # LOWERED from 0.40
+    ):
+        self.detector = plate_detector or PlateDetector(
+            confidence_threshold=conf_threshold
+        )
+        # Use PaddleOCR by default (with EasyOCR fallback built-in)
+        self.ocr = ocr_engine or PaddleOCREngine.get_instance()
+
     # ── Public API (implements PlateRecognizerInterface) ───────
     def recognize(
         self,
@@ -202,10 +210,3 @@ class ANPRPipeline(PlateRecognizerInterface):
             res = self.recognize(frame, vb)
             out[tuple(vb)] = res
         return out
-        conf_threshold: float = 0.20,  # LOWERED from 0.40
-    ):
-        self.detector = plate_detector or PlateDetector(
-            confidence_threshold=conf_threshold
-        )
-        # Use PaddleOCR by default (with EasyOCR fallback built-in)
-        self.ocr = ocr_engine or PaddleOCREngine.get_instance()

@@ -10,7 +10,6 @@ from fastapi import APIRouter, UploadFile, File, Form, HTTPException
 from fastapi.responses import JSONResponse
 
 router = APIRouter(prefix="/api/v1/anpr", tags=["anpr"])
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 def _get_db():
     """Get a SQLAlchemy Session using the app's configured engine (works in Docker + local)."""
