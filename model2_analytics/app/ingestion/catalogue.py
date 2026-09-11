@@ -15,6 +15,7 @@ import os
 import httpx
 
 from shared.schemas.vms import GridCameraEntry, GridCatalogueResponse
+from shared.db.constants import SENTINEL_GRID_SYSTEM_ID
 
 logger = logging.getLogger(__name__)
 
@@ -132,7 +133,14 @@ async def register_stream_in_mediamtx(
 def upsert_cameras_to_db(cameras: list[GridCameraEntry]) -> list[dict]:
     """
     Upsert a list of GridCameraEntry rows into the cameras table using
-    PostgreSQL INSERT ... ON CONFLICT (source_grid_id) DO UPDATE.
+    PostgreSQL INSERT ... ON CONFLICT (vms_system_id, source_grid_id) DO UPDATE.
+
+    Every row is tagged with SENTINEL_GRID_SYSTEM_ID so the grid is just
+    another vms_systems row (see shared/db/constants.py) rather than a
+    NULL/implicit special case — that's also why the conflict target is
+    the composite (vms_system_id, source_grid_id) pair now, not
+    source_grid_id alone: a federated VMS (model3_federation) can have
+    its own camera labelled "cam01" without colliding with the grid's.
     """
     from datetime import timezone, datetime
     from sqlalchemy import text
@@ -170,7 +178,7 @@ def upsert_cameras_to_db(cameras: list[GridCameraEntry]) -> list[dict]:
                     id, name, source_grid_id, is_live, grid_synced_at,
                     location_label, codec, stream_width, stream_height,
                     stream_fps, bitrate_kbps, rtsp_url, whep_url, hls_url,
-                    connectivity_status, is_active, created_at, updated_at
+                    connectivity_status, is_active, vms_system_id, created_at, updated_at
                 )
                 VALUES (
                     gen_random_uuid(),
@@ -189,10 +197,11 @@ def upsert_cameras_to_db(cameras: list[GridCameraEntry]) -> list[dict]:
                     :hls_url,
                     'online',
                     true,
+                    :vms_system_id,
                     :now,
                     :now
                 )
-                ON CONFLICT (source_grid_id) DO UPDATE SET
+                ON CONFLICT (vms_system_id, source_grid_id) DO UPDATE SET
                     is_live          = EXCLUDED.is_live,
                     grid_synced_at   = EXCLUDED.grid_synced_at,
                     location_label   = EXCLUDED.location_label,
@@ -230,6 +239,7 @@ def upsert_cameras_to_db(cameras: list[GridCameraEntry]) -> list[dict]:
                     "rtsp_url": c.rtsp_url,
                     "whep_url": c.webrtc_url,
                     "hls_url": c.hls_url,
+                    "vms_system_id": SENTINEL_GRID_SYSTEM_ID,
                     "now": now,
                 },
             )

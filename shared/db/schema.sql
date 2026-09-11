@@ -42,10 +42,38 @@ CREATE TABLE users (
 CREATE INDEX idx_users_department ON users (department_id);
 
 -- ============================================================
+-- VMS registry — one row per distinct video-management-system
+-- integration (the department that owns it, which vendor/protocol
+-- it speaks, whether Sentinel operates it directly or is only a
+-- consumer). A department can have more than one row here — e.g.
+-- a district traffic unit running its own separate system in
+-- addition to the main department-wide one — and a row need not
+-- be government-owned; `ownership` covers a private vendor system
+-- (e.g. a mall or society's own VMS) that Sentinel has been given
+-- read access to, same as it would for a government one.
+-- ============================================================
+
+CREATE TABLE vms_systems (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    name            TEXT NOT NULL,
+    vendor          TEXT,                             -- e.g. Milestone, HikCentral, Dahua DSS
+    protocol        TEXT,                             -- integration mechanism: onvif, vendor-sdk, simulated, ...
+    ownership       TEXT NOT NULL DEFAULT 'government'
+                    CHECK (ownership IN ('government', 'private')),
+    department_id   UUID REFERENCES departments(id) ON DELETE SET NULL,
+    status          TEXT NOT NULL DEFAULT 'unknown'
+                    CHECK (status IN ('connected', 'disconnected', 'unknown')),
+    camera_count    INT NOT NULL DEFAULT 0,
+    last_heartbeat  TIMESTAMPTZ,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX idx_vms_systems_department ON vms_systems (department_id);
+
+-- ============================================================
 -- Model 1 — Registry & GIS
 -- ============================================================
 --
--- `cameras` carries two kinds of columns, kept visually grouped
+-- `cameras` carries three kinds of columns, kept visually grouped
 -- below because they come from different places and get filled
 -- in at different times:
 --
@@ -58,9 +86,18 @@ CREATE INDEX idx_users_department ON users (department_id);
 --      — mirrored from the source so we don't hard-code stream URLs
 --      or assume a uniform codec/resolution across ~80,000 cameras.
 --      Notably: the grid gives a human-written location LABEL
---      ("06 Timbavadi gate-Junagadh"), not coordinates. `location`
+--      (\"06 Timbavadi gate-Junagadh\"), not coordinates. `location`
 --      is nullable in schema definition; seed.sql enriches all 30
 --      cameras with coordinates and department metadata for demo completeness.
+--   3. VMS federation fields — `vms_system_id` links a camera to the
+--      vms_systems row that reported it. NULL means the camera came
+--      from the main grid catalogue in (2) above, not from a
+--      federated VMS. This is the same `cameras` table either way —
+--      there is no separate camera table for federated systems.
+--      `source_grid_id` is that system's own id for the camera
+--      (the grid's \"id\" field for (2), or an adapter's external_id
+--      for (3)); it's only unique *within* a given vms_system_id,
+--      since two unrelated VMSs can both label a camera \"cam-01\".
 
 CREATE TABLE cameras (
     id                    UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -81,7 +118,7 @@ CREATE TABLE cameras (
     decommissioned_at     TIMESTAMPTZ,
 
     -- grid catalogue fields, mirrored from GET /api/ingest
-    source_grid_id        TEXT UNIQUE,                     -- "id" from /api/ingest — resync key, not our PK
+    source_grid_id        TEXT,                            -- "id" from /api/ingest, or a federated adapter's external_id — resync key, not our PK
     location_label        TEXT,                            -- raw "location" string from /api/ingest, e.g. "06 Timbavadi gate-Junagadh"
     is_live               BOOLEAN,                          -- grid's reported "live" flag
     codec                 TEXT,                            -- h264 | hevc | '' (grid reports blank when unknown) — mixed per model2_analytics/README
@@ -94,6 +131,9 @@ CREATE TABLE cameras (
     hls_url               TEXT,
     grid_synced_at         TIMESTAMPTZ,                     -- last time this row was refreshed from /api/ingest
 
+    -- VMS federation fields
+    vms_system_id         UUID REFERENCES vms_systems(id) ON DELETE SET NULL,
+
     created_at            TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at            TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -102,6 +142,8 @@ CREATE INDEX idx_cameras_department ON cameras (department_id);
 CREATE INDEX idx_cameras_district ON cameras (district_id);
 CREATE INDEX idx_cameras_status ON cameras (connectivity_status);
 CREATE INDEX idx_cameras_active ON cameras (is_active);
+CREATE INDEX idx_cameras_vms_system ON cameras (vms_system_id);
+CREATE UNIQUE INDEX idx_cameras_source_per_system ON cameras (vms_system_id, source_grid_id);
 
 CREATE TABLE status_history (
     id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -162,9 +204,13 @@ CREATE TABLE detections (
     id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     camera_id           UUID NOT NULL REFERENCES cameras(id) ON DELETE RESTRICT,
     "timestamp"         TIMESTAMPTZ NOT NULL,
+    event_type           TEXT NOT NULL DEFAULT 'vehicle_detection',  -- vehicle_detection | person_detection | intrusion, ...
     detected_plate       TEXT,                -- specific sighting's OCR output
+    vehicle_type         TEXT,                -- car | truck | motorcycle, ... — sighting-level, separate from vehicle_tracks.vehicle_type
     confidence           REAL,
     cropped_image_path   TEXT,
+    raw_payload          JSONB,               -- original vendor/adapter payload, kept for audit — nullable, only set when the source is a VMS integration that provides one
+    source_timestamp     TIMESTAMPTZ,         -- when the *source* system says this happened, if it reports one distinct from "timestamp" (when we received/processed it)
     vehicle_track_id     UUID REFERENCES vehicle_tracks(id) ON DELETE SET NULL,
     created_at            TIMESTAMPTZ NOT NULL DEFAULT now()
 );

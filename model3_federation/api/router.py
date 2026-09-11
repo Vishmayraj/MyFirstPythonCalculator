@@ -229,15 +229,15 @@ def get_federated_systems(
     db: Session = Depends(get_db),
     current_user: UserModel = Depends(get_current_user),
 ) -> list[dict[str, Any]]:
-    """List all 3 federated VMS systems with status, camera count, and last heartbeat."""
+    """List all VMS systems (main grid + federated) with status, camera count, and last heartbeat."""
     rows = db.execute(text(
         """
-        SELECT fs.id, fs.name, fs.vendor, fs.status,
-               fs.camera_count, fs.last_heartbeat, fs.protocol,
+        SELECT vs.id, vs.name, vs.vendor, vs.status,
+               vs.camera_count, vs.last_heartbeat, vs.protocol, vs.ownership,
                d.name AS department_name
-        FROM   federated_systems fs
-        LEFT JOIN departments d ON d.id = fs.department_id
-        ORDER  BY fs.name
+        FROM   vms_systems vs
+        LEFT JOIN departments d ON d.id = vs.department_id
+        ORDER  BY vs.name
         """
     )).fetchall()
 
@@ -253,7 +253,8 @@ def get_federated_systems(
             "camera_count":    r[4] or 0,
             "last_heartbeat":  r[5].isoformat() if r[5] else None,
             "protocol":        r[6],
-            "department":      r[7],
+            "ownership":       r[7],
+            "department":      r[8],
             "events_per_min":  len(epm_bucket),
         })
     return result
@@ -265,21 +266,21 @@ def get_federated_cameras(
     db: Session = Depends(get_db),
     current_user: UserModel = Depends(get_current_user),
 ) -> list[dict[str, Any]]:
-    """All federated cameras, optionally filtered by system_id."""
+    """Federated cameras (cameras with a non-null vms_system_id), optionally filtered by system_id."""
     q = """
-        SELECT fc.id, fc.system_id, fc.external_id, fc.name,
-               fc.location_label, fc.is_active,
-               ST_Y(fc.location::geometry) AS lat,
-               ST_X(fc.location::geometry) AS lng,
-               fs.name AS system_name, fs.vendor
-        FROM   federated_cameras fc
-        JOIN   federated_systems fs ON fs.id = fc.system_id
+        SELECT c.id, c.vms_system_id, c.source_grid_id, c.name,
+               c.location_label, c.is_active,
+               ST_Y(c.location::geometry) AS lat,
+               ST_X(c.location::geometry) AS lng,
+               vs.name AS system_name, vs.vendor
+        FROM   cameras c
+        JOIN   vms_systems vs ON vs.id = c.vms_system_id
     """
     params: dict = {}
     if system_id:
-        q += " WHERE fc.system_id = :sys"
+        q += " WHERE c.vms_system_id = :sys"
         params["sys"] = system_id
-    q += " ORDER BY fs.name, fc.name"
+    q += " ORDER BY vs.name, c.name"
 
     rows = db.execute(text(q), params).fetchall()
     return [
@@ -307,26 +308,26 @@ def get_federated_events(
     db: Session = Depends(get_db),
     current_user: UserModel = Depends(get_current_user),
 ) -> list[dict[str, Any]]:
-    """Recent federated events. Filterable by system_id and plate."""
+    """Recent federated detections (cameras with a non-null vms_system_id). Filterable by system_id and plate."""
     q = """
-        SELECT fe.id, fe.system_id, fe.event_type, fe.detected_plate,
-               fe.confidence, fe.vehicle_type, fe.received_at, fe.source_timestamp,
-               fs.name AS system_name, fs.vendor,
-               fc.name AS camera_name
-        FROM   federated_events fe
-        JOIN   federated_systems fs ON fs.id = fe.system_id
-        LEFT JOIN federated_cameras fc ON fc.id = fe.camera_id
-        WHERE 1=1
+        SELECT d.id, c.vms_system_id, d.event_type, d.detected_plate,
+               d.confidence, d.vehicle_type, d."timestamp", d.source_timestamp,
+               vs.name AS system_name, vs.vendor,
+               c.name AS camera_name
+        FROM   detections d
+        JOIN   cameras c ON c.id = d.camera_id
+        JOIN   vms_systems vs ON vs.id = c.vms_system_id
+        WHERE  c.vms_system_id IS NOT NULL
     """
     params: dict = {}
     if system_id:
-        q += " AND fe.system_id = :sys"
+        q += " AND c.vms_system_id = :sys"
         params["sys"] = system_id
     if plate:
         from model3_federation.correlation.engine import _normalize_plate
         params["plate"] = _normalize_plate(plate)
-        q += " AND fe.detected_plate = :plate"
-    q += " ORDER BY fe.received_at DESC LIMIT :lim"
+        q += " AND d.detected_plate = :plate"
+    q += " ORDER BY d.\"timestamp\" DESC LIMIT :lim"
     params["lim"] = limit
 
     rows = db.execute(text(q), params).fetchall()
@@ -355,7 +356,7 @@ def get_events_stats(
 ) -> list[dict[str, Any]]:
     """Events per minute per system (live rate from in-memory counter)."""
     rows = db.execute(text(
-        "SELECT id, name, vendor FROM federated_systems ORDER BY name"
+        "SELECT id, name, vendor FROM vms_systems ORDER BY name"
     )).fetchall()
 
     return [
@@ -375,36 +376,41 @@ def get_correlations(
     db: Session = Depends(get_db),
     current_user: UserModel = Depends(get_current_user),
 ) -> list[dict[str, Any]]:
-    """All cross-system correlations, most recent first."""
+    """
+    Cross-system correlations, most recent first. Computed on the fly from
+    detections + vehicle_tracks — there's no stored correlation_results
+    table to drift out of sync with the raw sightings (see engine.py's
+    module docstring). A "correlation" here is any vehicle_track whose
+    detections span more than one distinct vms_system_id.
+    """
     rows = db.execute(text(
         """
-        SELECT id, plate_number, system_ids, first_seen, last_seen,
-               travel_time_secs, camera_sequence, is_watchlisted, updated_at
-        FROM   correlation_results
-        ORDER  BY last_seen DESC
+        SELECT vt.id, vt.plate_number, vt.first_seen, vt.last_seen, vt.is_watchlisted,
+               array_agg(DISTINCT vs.name) FILTER (WHERE vs.name IS NOT NULL) AS systems,
+               count(DISTINCT c.vms_system_id) AS system_count
+        FROM   vehicle_tracks vt
+        JOIN   detections d ON d.vehicle_track_id = vt.id
+        JOIN   cameras c ON c.id = d.camera_id
+        LEFT JOIN vms_systems vs ON vs.id = c.vms_system_id
+        WHERE  c.vms_system_id IS NOT NULL
+        GROUP  BY vt.id
+        HAVING count(DISTINCT c.vms_system_id) > 1
+        ORDER  BY vt.last_seen DESC
         LIMIT  :lim
         """
     ), {"lim": limit}).fetchall()
 
     result = []
     for r in rows:
-        # Resolve system names from IDs
-        sys_ids = r[2] or []
-        sys_name_rows = db.execute(text(
-            "SELECT name FROM federated_systems WHERE id = ANY(:ids)"
-        ), {"ids": sys_ids}).fetchall() if sys_ids else []
-        sys_names = [row[0] for row in sys_name_rows]
-
+        travel_secs = int((r[3] - r[2]).total_seconds()) if r[2] and r[3] else None
         result.append({
             "id":               str(r[0]),
             "plate_number":     r[1],
-            "systems_involved": sys_names,
-            "first_seen":       r[3].isoformat() if r[3] else None,
-            "last_seen":        r[4].isoformat() if r[4] else None,
-            "travel_time_secs": r[5],
-            "camera_sequence":  r[6] if r[6] else [],
-            "is_watchlisted":   r[7],
-            "updated_at":       r[8].isoformat() if r[8] else None,
+            "systems_involved": r[5] or [],
+            "first_seen":       r[2].isoformat() if r[2] else None,
+            "last_seen":        r[3].isoformat() if r[3] else None,
+            "travel_time_secs": travel_secs,
+            "is_watchlisted":   r[4],
         })
     return result
 
@@ -415,7 +421,11 @@ def track_vehicle(
     db: Session = Depends(get_db),
     current_user: UserModel = Depends(get_current_user),
 ) -> dict[str, Any]:
-    """Full multi-system route for a specific plate number."""
+    """
+    Full multi-system route for a specific plate number. Now that cameras
+    live in one shared table, this naturally covers sightings from both
+    the main grid and federated VMS systems, not just federated ones.
+    """
     from model3_federation.correlation.engine import _normalize_plate
     plate_norm = _normalize_plate(plate)
     if not plate_norm:
@@ -423,17 +433,17 @@ def track_vehicle(
 
     rows = db.execute(text(
         """
-        SELECT fe.id, fe.system_id, fe.received_at, fe.source_timestamp,
-               fe.confidence, fe.vehicle_type,
-               fc.name AS camera_name, fc.location_label,
-               ST_Y(fc.location::geometry) AS lat,
-               ST_X(fc.location::geometry) AS lng,
-               fs.name AS system_name, fs.vendor
-        FROM   federated_events fe
-        JOIN   federated_systems fs ON fs.id = fe.system_id
-        LEFT JOIN federated_cameras fc ON fc.id = fe.camera_id
-        WHERE  fe.detected_plate = :p
-        ORDER  BY fe.received_at ASC
+        SELECT d.id, c.vms_system_id, d."timestamp", d.source_timestamp,
+               d.confidence, d.vehicle_type,
+               c.name AS camera_name, c.location_label,
+               ST_Y(c.location::geometry) AS lat,
+               ST_X(c.location::geometry) AS lng,
+               vs.name AS system_name, vs.vendor
+        FROM   detections d
+        JOIN   cameras c ON c.id = d.camera_id
+        LEFT JOIN vms_systems vs ON vs.id = c.vms_system_id
+        WHERE  d.detected_plate = :p
+        ORDER  BY d."timestamp" ASC
         LIMIT  100
         """
     ), {"p": plate_norm}).fetchall()
@@ -441,7 +451,7 @@ def track_vehicle(
     sightings = [
         {
             "event_id":       str(r[0]),
-            "system_id":      str(r[1]),
+            "system_id":      str(r[1]) if r[1] else None,
             "received_at":    r[2].isoformat() if r[2] else None,
             "source_timestamp": r[3].isoformat() if r[3] else None,
             "confidence":     r[4],
@@ -450,7 +460,7 @@ def track_vehicle(
             "location_label": r[7],
             "lat":            float(r[8]) if r[8] is not None else None,
             "lng":            float(r[9]) if r[9] is not None else None,
-            "system_name":    r[10],
+            "system_name":    r[10] or "Sentinel Camera Grid",
             "vendor":         r[11],
         }
         for r in rows
@@ -469,19 +479,19 @@ def get_federated_alerts(
     db: Session = Depends(get_db),
     current_user: UserModel = Depends(get_current_user),
 ) -> list[dict[str, Any]]:
-    """Federated watchlist alerts, most recent first."""
+    """Federation-originated watchlist alerts (from cameras with a non-null vms_system_id), most recent first."""
     rows = db.execute(text(
         """
-        SELECT fa.id, fa.created_at, fa.severity, fa.alert_type,
-               fa.acknowledged_at,
-               fe.detected_plate,
-               fc.name AS camera_name,
-               fs.name AS system_name
-        FROM   federated_alerts fa
-        JOIN   federated_events fe ON fe.id = fa.event_id
-        JOIN   federated_systems fs ON fs.id = fa.system_id
-        LEFT JOIN federated_cameras fc ON fc.id = fe.camera_id
-        ORDER  BY fa.created_at DESC
+        SELECT a.id, a.created_at, a.severity, a.alert_type,
+               a.acknowledged_at,
+               d.detected_plate,
+               c.name AS camera_name,
+               vs.name AS system_name
+        FROM   alerts a
+        JOIN   detections d ON d.id = a.detection_id
+        JOIN   cameras c ON c.id = d.camera_id
+        JOIN   vms_systems vs ON vs.id = c.vms_system_id
+        ORDER  BY a.created_at DESC
         LIMIT  :lim
         """
     ), {"lim": limit}).fetchall()
@@ -510,13 +520,14 @@ def acknowledge_alert(
     """Mark a federated alert as acknowledged. Same role gate as model2's write endpoints."""
     result = db.execute(text(
         """
-        UPDATE federated_alerts
-        SET    acknowledged_at = now()
+        UPDATE alerts
+        SET    acknowledged_at = now(),
+               acknowledged_by = :uid
         WHERE  id = :id
           AND  acknowledged_at IS NULL
         RETURNING id
         """
-    ), {"id": alert_id}).fetchone()
+    ), {"id": alert_id, "uid": str(current_user.id)}).fetchone()
 
     if not result:
         raise HTTPException(status_code=404, detail="Alert not found or already acknowledged")

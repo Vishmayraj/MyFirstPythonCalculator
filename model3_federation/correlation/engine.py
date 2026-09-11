@@ -3,19 +3,32 @@ model3_federation.correlation.engine
 --------------------------------------
 Cross-system correlation engine — the intelligence layer of Model 3.
 
+Writes to the same shared tables Model 1/2 already use (shared/db/schema.sql)
+instead of a model3-private schema — see model3_federation/registration.py's
+docstring for why. Concretely, that means:
+
 For every FederatedEvent arriving on the bus:
-  1. Write to `federated_events` table (full audit trail).
-  2. Watchlist check: query vehicles_watchlist WHERE plate = normalize(plate).
-       → If match: INSERT federated_alerts, broadcast alert via WebSocket.
-  3. Cross-system correlation:
-       → Query federated_events WHERE detected_plate = this plate
-          AND system_id != this system AND received_at > now() - 30 min.
-       → If found: INSERT/UPDATE correlation_results, broadcast correlation.
-  4. Broadcast event (+ any alert/correlation) to /ws/federation WebSocket.
-  5. Deduplication: same plate + same camera_external_id + within 60 s = skip.
+  1. Resolve the `cameras` row for (vms_system_id, camera_external_id).
+  2. Resolve-or-create a `vehicle_tracks` row for the plate, using the
+     same deterministic id (uuid5 of the normalised plate) that
+     model2_analytics/pipeline/tracking/associator_interface.py's
+     TrackAssociatorStub uses — so a plate resolves to the *same*
+     track whether Model 2's real analytics pipeline or a Model 3
+     federated adapter saw it first.
+  3. Write to `detections` (full audit trail, camera_id + vehicle_track_id).
+  4. Watchlist check: query vehicles_watchlist WHERE plate = normalize(plate).
+       -> If match: INSERT alerts, broadcast alert via WebSocket.
+  5. Cross-system correlation: query `detections` for the same
+     vehicle_track_id seen via a *different* vms_system_id within the
+     last 30 minutes. No separate correlation_results table — this is
+     always derivable from detections + cameras + vms_systems, so it's
+     computed here (and again on demand by the API router) rather than
+     cached in a table that could drift from the raw detections.
+  6. Broadcast event (+ any alert/correlation) to /ws/federation WebSocket.
+  7. Deduplication: same plate + same camera_external_id + within 60 s = skip.
 
 The engine runs as a single asyncio background task. It uses the
-shared DB session in thread-executor (synchronous SQLAlchemy ORM calls
+shared DB session in thread-executor (synchronous SQLAlchemy calls
 run in a thread pool) to avoid blocking the event loop.
 
 WebSocket broadcast: the engine receives an async callback `ws_broadcast`
@@ -28,9 +41,9 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Awaitable, Callable, Optional
-from uuid import uuid4
 
 from model3_federation.bus.event_bus import FederationEventBus
 from model3_federation.schemas.models import (
@@ -48,6 +61,18 @@ def _normalize_plate(plate: Optional[str]) -> Optional[str]:
     if not plate:
         return None
     return re.sub(r"[\s\-]", "", plate.upper())
+
+
+def _track_id_for_plate(plate_norm: str) -> str:
+    """
+    Same derivation as model2_analytics's TrackAssociatorStub.associate():
+    a deterministic UUID from the plate, so the same plate always
+    resolves to the same vehicle_tracks row no matter which pipeline
+    (Model 2's real analytics or a Model 3 federated adapter) sees it
+    first — that's how cross-system correlation and Model 2's own
+    cross-camera correlation end up being the same mechanism.
+    """
+    return str(uuid.uuid5(uuid.NAMESPACE_DNS, plate_norm))
 
 
 class CorrelationEngine:
@@ -165,197 +190,161 @@ class CorrelationEngine:
         """
         result: dict = {}
 
-        try:
-            from shared.db.session import get_db_direct
-        except ImportError:
-            # get_db_direct may not exist yet; try alternate import path
-            try:
-                from shared.db.session import SessionLocal as _SL
-                def get_db_direct():
-                    return _SL()
-            except ImportError:
-                logger.warning("DB session not available — skipping DB write for event %s", event.id)
-                return result
-
         session = None
         try:
             session = self._db_session_factory()
 
-            # ── 2a. Persist to federated_events ─────────────────
             from sqlalchemy import text
-
-            # Look up the federated_camera UUID from external_id + system_id
-            cam_row = session.execute(text(
-                "SELECT id FROM federated_cameras "
-                "WHERE system_id = :sys AND external_id = :ext LIMIT 1"
-            ), {"sys": event.system_id, "ext": event.camera_external_id}).fetchone()
-            cam_id = str(cam_row[0]) if cam_row else None
-
             import json as _json
-            session.execute(text(
-                """
-                INSERT INTO federated_events
-                  (system_id, camera_id, event_type, detected_plate, confidence,
-                   vehicle_type, snapshot_url, raw_payload, received_at, source_timestamp)
-                VALUES
-                  (:sys, :cam, :etype, :plate, :conf,
-                   :vtype, :snap, :raw::jsonb, :recv, :src)
-                """
-            ), {
-                "sys":   event.system_id,
-                "cam":   cam_id,
-                "etype": event.event_type,
-                "plate": plate_norm,
-                "conf":  event.confidence,
-                "vtype": event.vehicle_type,
-                "snap":  event.snapshot_url,
-                "raw":   _json.dumps(event.raw_payload),
-                "recv":  event.received_at,
-                "src":   event.source_timestamp,
-            })
 
-            # ── 2b. Watchlist check ───────────────────────────────
+            # ── 2a. Look up the camera row for this system + external_id ──
+            cam_row = session.execute(text(
+                "SELECT id FROM cameras WHERE vms_system_id = :sys AND source_grid_id = :ext LIMIT 1"
+            ), {"sys": event.system_id, "ext": event.camera_external_id}).fetchone()
+
+            if cam_row is None:
+                # Adapter reported an event for a camera we never registered.
+                # Skip the DB write rather than violating detections.camera_id's
+                # NOT NULL/FK constraint with a made-up id.
+                logger.warning(
+                    "No camera row for system=%s external_id=%s — skipping DB write for event %s",
+                    event.system_id, event.camera_external_id, event.id,
+                )
+                return result
+            cam_id = str(cam_row[0])
+
+            # ── 2b. Resolve-or-create the vehicle_tracks row ──────
+            track_id: Optional[str] = None
+            if plate_norm:
+                track_id = _track_id_for_plate(plate_norm)
+                session.execute(text(
+                    """
+                    INSERT INTO vehicle_tracks (id, plate_number, vehicle_type, first_seen, last_seen)
+                    VALUES (:id, :plate, :vtype, :ts, :ts)
+                    ON CONFLICT (id) DO UPDATE
+                    SET last_seen = EXCLUDED.last_seen,
+                        plate_number = COALESCE(vehicle_tracks.plate_number, EXCLUDED.plate_number)
+                    """
+                ), {
+                    "id": track_id,
+                    "plate": plate_norm,
+                    "vtype": event.vehicle_type,
+                    "ts": event.received_at,
+                })
+
+            # ── 2c. Watchlist check (done before the detections insert
+            #        so we know is_watchlisted before writing the row) ──
+            watchlist_id: Optional[str] = None
             if plate_norm:
                 wl_row = session.execute(text(
                     "SELECT id FROM vehicles_watchlist "
                     "WHERE plate_number = :p AND status = 'active' LIMIT 1"
                 ), {"p": plate_norm}).fetchone()
-
                 if wl_row:
-                    # Fetch the just-inserted event row ID
-                    ev_row = session.execute(text(
-                        "SELECT id FROM federated_events "
-                        "WHERE system_id = :sys AND detected_plate = :p "
-                        "ORDER BY received_at DESC LIMIT 1"
-                    ), {"sys": event.system_id, "p": plate_norm}).fetchone()
+                    watchlist_id = str(wl_row[0])
+                    if track_id:
+                        session.execute(text(
+                            "UPDATE vehicle_tracks SET is_watchlisted = true WHERE id = :id"
+                        ), {"id": track_id})
 
-                    ev_db_id = str(ev_row[0]) if ev_row else str(uuid4())
+            # ── 2d. Persist to detections ──────────────────────────
+            detection_id = str(uuid.uuid4())
+            session.execute(text(
+                """
+                INSERT INTO detections
+                  (id, camera_id, "timestamp", event_type, detected_plate,
+                   vehicle_type, confidence, cropped_image_path,
+                   raw_payload, source_timestamp, vehicle_track_id)
+                VALUES
+                  (:id, :cam, :ts, :etype, :plate,
+                   :vtype, :conf, :snap,
+                   :raw::jsonb, :src, :track)
+                """
+            ), {
+                "id":    detection_id,
+                "cam":   cam_id,
+                "ts":    event.received_at,
+                "etype": event.event_type,
+                "plate": plate_norm,
+                "vtype": event.vehicle_type,
+                "conf":  event.confidence,
+                "snap":  event.snapshot_url,
+                "raw":   _json.dumps(event.raw_payload),
+                "src":   event.source_timestamp,
+                "track": track_id,
+            })
 
-                    session.execute(text(
-                        """
-                        INSERT INTO federated_alerts
-                          (event_id, watchlist_id, system_id, severity, alert_type)
-                        VALUES
-                          (:ev, :wl, :sys, 'high', 'federated_vehicle_match')
-                        """
-                    ), {"ev": ev_db_id, "wl": str(wl_row[0]), "sys": event.system_id})
+            # ── 2e. Alert on watchlist hit ─────────────────────────
+            if watchlist_id:
+                session.execute(text(
+                    """
+                    INSERT INTO alerts (detection_id, watchlist_id, alert_type, severity)
+                    VALUES (:det, :wl, 'federated_vehicle_match', 'high')
+                    """
+                ), {"det": detection_id, "wl": watchlist_id})
 
-                    result["alert"] = FederatedAlert(
-                        event_id=ev_db_id,
-                        plate_number=plate_norm,
-                        system_name=event.system_name,
-                        camera_name=event.camera_name,
-                        severity="high",
-                    )
+                result["alert"] = FederatedAlert(
+                    event_id=detection_id,
+                    plate_number=plate_norm,
+                    system_name=event.system_name,
+                    camera_name=event.camera_name,
+                    severity="high",
+                )
 
-            # ── 2c. Cross-system correlation ──────────────────────
-            if plate_norm:
+            # ── 2f. Cross-system correlation (computed, not stored) ─
+            if track_id:
                 window_start = event.received_at - timedelta(minutes=30)
                 other_rows = session.execute(text(
                     """
-                    SELECT fe.id, fe.system_id, fe.camera_id, fe.received_at,
-                           fc.name AS camera_name,
-                           ST_Y(fc.location::geometry) AS lat,
-                           ST_X(fc.location::geometry) AS lng
-                    FROM   federated_events fe
-                    LEFT JOIN federated_cameras fc ON fc.id = fe.camera_id
-                    WHERE  fe.detected_plate = :p
-                      AND  fe.system_id != :sys
-                      AND  fe.received_at >= :win
-                    ORDER  BY fe.received_at ASC
+                    SELECT d.id, c.vms_system_id, d."timestamp",
+                           c.name AS camera_name,
+                           vs.name AS system_name,
+                           ST_Y(c.location::geometry) AS lat,
+                           ST_X(c.location::geometry) AS lng
+                    FROM   detections d
+                    JOIN   cameras c ON c.id = d.camera_id
+                    LEFT JOIN vms_systems vs ON vs.id = c.vms_system_id
+                    WHERE  d.vehicle_track_id = :track
+                      AND  c.vms_system_id IS DISTINCT FROM :this_sys
+                      AND  d."timestamp" >= :win
+                    ORDER  BY d."timestamp" ASC
                     LIMIT  20
                     """
-                ), {"p": plate_norm, "sys": event.system_id, "win": window_start}).fetchall()
+                ), {"track": track_id, "this_sys": event.system_id, "win": window_start}).fetchall()
 
                 if other_rows:
-                    all_system_ids = list({event.system_id} | {str(r[1]) for r in other_rows})
-                    all_event_ids  = [str(r[0]) for r in other_rows]
+                    sys_names = list({event.system_name} | {r[4] for r in other_rows if r[4]})
 
                     seq = []
                     for r in other_rows:
                         seq.append({
-                            "camera_name": r[4] or "Unknown",
-                            "system_id":   str(r[1]),
-                            "timestamp":   r[3].isoformat() if r[3] else None,
-                            "lat":         float(r[5]) if r[5] else None,
-                            "lng":         float(r[6]) if r[6] else None,
+                            "camera_name": r[3] or "Unknown",
+                            "system_name": r[4],
+                            "timestamp":   r[2].isoformat() if r[2] else None,
+                            "lat":         float(r[5]) if r[5] is not None else None,
+                            "lng":         float(r[6]) if r[6] is not None else None,
                         })
                     # Add current event at the end
-                    cam_info = cam_row  # already fetched above
                     seq.append({
                         "camera_name": event.camera_name,
-                        "system_id":   event.system_id,
+                        "system_name": event.system_name,
                         "timestamp":   event.received_at.isoformat(),
                         "lat":         None,
                         "lng":         None,
                     })
 
-                    first_seen = other_rows[0][3] if other_rows else event.received_at
+                    first_seen = other_rows[0][2] if other_rows else event.received_at
                     travel_secs = int((event.received_at - first_seen).total_seconds())
 
-                    import json as _json2
-                    # Upsert correlation_results by plate_number
-                    existing = session.execute(text(
-                        "SELECT id FROM correlation_results WHERE plate_number = :p LIMIT 1"
-                    ), {"p": plate_norm}).fetchone()
-
-                    if existing:
-                        session.execute(text(
-                            """
-                            UPDATE correlation_results
-                            SET last_seen        = :last,
-                                travel_time_secs = :tt,
-                                camera_sequence  = :seq::jsonb,
-                                updated_at       = now()
-                            WHERE id = :id
-                            """
-                        ), {
-                            "last": event.received_at,
-                            "tt":   travel_secs,
-                            "seq":  _json2.dumps(seq),
-                            "id":   str(existing[0]),
-                        })
-                        corr_id = str(existing[0])
-                    else:
-                        corr_id = str(uuid4())
-                        session.execute(text(
-                            """
-                            INSERT INTO correlation_results
-                              (id, plate_number, event_ids, system_ids,
-                               first_seen, last_seen, travel_time_secs,
-                               camera_sequence, is_watchlisted)
-                            VALUES
-                              (:id, :p, :eids, :sids,
-                               :first, :last, :tt,
-                               :seq::jsonb, :wl)
-                            """
-                        ), {
-                            "id":    corr_id,
-                            "p":     plate_norm,
-                            "eids":  all_event_ids,
-                            "sids":  all_system_ids,
-                            "first": first_seen,
-                            "last":  event.received_at,
-                            "tt":    travel_secs,
-                            "seq":   _json2.dumps(seq),
-                            "wl":    result.get("alert") is not None,
-                        })
-
-                    # Resolve system names for the result object
-                    sys_name_rows = session.execute(text(
-                        "SELECT name FROM federated_systems WHERE id = ANY(:ids)"
-                    ), {"ids": all_system_ids}).fetchall()
-                    sys_names = [r[0] for r in sys_name_rows] if sys_name_rows else all_system_ids
-
                     result["correlation"] = CorrelationResult(
-                        id=corr_id,
+                        id=track_id,
                         plate_number=plate_norm,
                         systems_involved=sys_names,
                         first_seen=first_seen,
                         last_seen=event.received_at,
                         travel_time_secs=travel_secs,
                         camera_sequence=seq,
-                        is_watchlisted=result.get("alert") is not None,
+                        is_watchlisted=watchlist_id is not None,
                     )
 
             session.commit()

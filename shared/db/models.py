@@ -25,7 +25,7 @@ from sqlalchemy import (
     text,
 )
 from sqlalchemy.types import UserDefinedType
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import DeclarativeBase, relationship
 
 
@@ -121,6 +121,46 @@ class User(Base):
     )
 
 
+class VMSSystem(Base):
+    __tablename__ = "vms_systems"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    name = Column(Text, nullable=False)
+    vendor = Column(Text)
+    protocol = Column(Text)
+    ownership = Column(
+        Text,
+        nullable=False,
+        default="government",
+        info={"check": "ownership IN ('government', 'private')"},
+    )
+    department_id = Column(
+        UUID(as_uuid=True), ForeignKey("departments.id", ondelete="SET NULL")
+    )
+    status = Column(
+        Text,
+        nullable=False,
+        default="unknown",
+        info={"check": "status IN ('connected', 'disconnected', 'unknown')"},
+    )
+    camera_count = Column(Integer, nullable=False, default=0)
+    last_heartbeat = Column(DateTime(timezone=True))
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default="now()")
+
+    department = relationship("Department")
+    cameras = relationship("Camera", back_populates="vms_system")
+
+    __table_args__ = (
+        CheckConstraint(
+            "ownership IN ('government', 'private')", name="vms_systems_ownership_check"
+        ),
+        CheckConstraint(
+            "status IN ('connected', 'disconnected', 'unknown')", name="vms_systems_status_check"
+        ),
+        Index("idx_vms_systems_department", "department_id"),
+    )
+
+
 # ── Model 1 — Registry & GIS ───────────────────────────────────
 
 
@@ -150,7 +190,7 @@ class Camera(Base):
     decommissioned_at = Column(DateTime(timezone=True))
 
     # Grid catalogue fields (mirrored from GET /api/ingest)
-    source_grid_id = Column(Text, unique=True)
+    source_grid_id = Column(Text)
     location_label = Column(Text)
     is_live = Column(Boolean)
     codec = Column(Text)
@@ -163,12 +203,18 @@ class Camera(Base):
     hls_url = Column(Text)
     grid_synced_at = Column(DateTime(timezone=True))
 
+    # VMS federation fields
+    vms_system_id = Column(
+        UUID(as_uuid=True), ForeignKey("vms_systems.id", ondelete="SET NULL")
+    )
+
     created_at = Column(DateTime(timezone=True), nullable=False, server_default="now()")
     updated_at = Column(DateTime(timezone=True), nullable=False, server_default="now()")
 
     department = relationship("Department", back_populates="cameras")
     district = relationship("District", back_populates="cameras")
     status_history = relationship("StatusHistory", back_populates="camera")
+    vms_system = relationship("VMSSystem", back_populates="cameras")
 
     __table_args__ = (
         CheckConstraint(
@@ -180,6 +226,13 @@ class Camera(Base):
         Index("idx_cameras_district", "district_id"),
         Index("idx_cameras_status", "connectivity_status"),
         Index("idx_cameras_active", "is_active"),
+        Index("idx_cameras_vms_system", "vms_system_id"),
+        Index(
+            "idx_cameras_source_per_system",
+            "vms_system_id",
+            "source_grid_id",
+            unique=True,
+        ),
     )
 
 
@@ -306,9 +359,13 @@ class Detection(Base):
         UUID(as_uuid=True), ForeignKey("cameras.id", ondelete="RESTRICT"), nullable=False
     )
     timestamp = Column(DateTime(timezone=True), nullable=False)
+    event_type = Column(Text, nullable=False, default="vehicle_detection")
     detected_plate = Column(Text)
+    vehicle_type = Column(Text)
     confidence = Column(REAL)
     cropped_image_path = Column(Text)
+    raw_payload = Column(JSONB)
+    source_timestamp = Column(DateTime(timezone=True))
     vehicle_track_id = Column(
         UUID(as_uuid=True), ForeignKey("vehicle_tracks.id", ondelete="SET NULL")
     )

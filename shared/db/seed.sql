@@ -72,6 +72,21 @@ ON CONFLICT (name) DO UPDATE SET boundary = EXCLUDED.boundary;
 
 
 -- ------------------------------------------------------------
+-- VMS systems
+-- ------------------------------------------------------------
+-- The main Sentinel grid registers itself as a vms_systems row on
+-- the same footing as federated systems — Police/RTO/Municipal
+-- adapters self-register their own rows at runtime (see
+-- model3_federation/registration.py). Fixed id matches
+-- shared/db/constants.py::SENTINEL_GRID_SYSTEM_ID so
+-- model2_analytics/app/ingestion/catalogue.py can reference it
+-- without a lookup.
+-- ------------------------------------------------------------
+INSERT INTO vms_systems (id, name, vendor, protocol, ownership, status)
+VALUES ('a1000000-0000-0000-0000-000000000000', 'Sentinel Camera Grid', 'sentinel-grid', 'grid-api', 'government', 'connected')
+ON CONFLICT (id) DO NOTHING;
+
+-- ------------------------------------------------------------
 -- Cameras — from GET /api/ingest on the government camera grid
 -- ------------------------------------------------------------
 -- Mapped with realistic department_id, camera_type, ownership,
@@ -324,6 +339,13 @@ INSERT INTO cameras (
      'fixed', 'government', 'cloud', 30, 'http://live.corp8.cloud:8889/stream/30/whep',
      'online', true, NULL, NULL, NULL, NULL, NULL,
      'rtsp://103.250.160.189:8554/stream/cam30', 'http://live.corp8.cloud:8889/stream/30/whep', '/live/stream/30/index.m3u8', now());
+
+-- All 30 rows above just inserted belong to the main grid — link them
+-- to its vms_systems row (composite-unique with source_grid_id, so this
+-- has to be set before any federated system tries to reuse a "cam01"-style
+-- external_id of its own).
+UPDATE cameras SET vms_system_id = 'a1000000-0000-0000-0000-000000000000'
+WHERE vms_system_id IS NULL AND source_grid_id IS NOT NULL;
 
 -- ------------------------------------------------------------
 -- Model 2 Sample / Seed Data — Watchlists, Tracks, Detections, Alerts

@@ -31,7 +31,11 @@ services:
       - ../shared/db/schema.sql:/docker-entrypoint-initdb.d/20-schema.sql:ro
       - ../shared/db/triggers.sql:/docker-entrypoint-initdb.d/30-triggers.sql:ro
       - ../shared/db/seed.sql:/docker-entrypoint-initdb.d/40-seed.sql:ro
-      - ../model3_federation/db/federation_schema.sql:/docker-entrypoint-initdb.d/50-federation-schema.sql:ro
+      # model3_federation/db/federation_schema.sql no longer exists: the
+      # vms_systems table and cameras.vms_system_id column it defined are
+      # now part of shared/db/schema.sql above, since federated VMS
+      # cameras and Model 1's own grid cameras are the same `cameras`
+      # table now (see model3_federation/registration.py's docstring).
       # No seed file here on purpose: federated_systems/federated_cameras rows
       # come from each adapter registering itself at startup (see
       # model3_federation/registration.py), and federated_events/
