@@ -478,6 +478,50 @@ const EMOJI_MAP = {
     cycle: '🚲',
 };
 
+// ══ Watchlist Alert Toast (WS WATCHLIST_ALERT) ════════════════
+function showWatchlistAlert(a) {
+    let host = document.getElementById('wlToastHost');
+    if (!host) {
+        host = document.createElement('div');
+        host.id = 'wlToastHost';
+        host.style.cssText = 'position:fixed; top:1rem; right:1rem; z-index:99999; display:flex; flex-direction:column; gap:.6rem; max-width:360px;';
+        document.body.appendChild(host);
+    }
+    const sev = (a.severity || 'high').toLowerCase();
+    const bg = (sev === 'critical') ? 'rgba(239,68,68,.95)' : (sev === 'high') ? 'rgba(248,113,113,.92)' : 'rgba(245,158,11,.9)';
+    const t = document.createElement('div');
+    t.style.cssText = 'background:' + bg + '; color:#fff; padding:.9rem 1.1rem; border-radius:10px; box-shadow:0 10px 30px rgba(0,0,0,.45); font-size:.85rem; border:1px solid rgba(255,255,255,.25);';
+
+    // Build toast content using DOM methods (XSS-safe)
+    const title = document.createElement('div');
+    title.style.cssText = 'font-weight:800; letter-spacing:.04em;';
+    title.textContent = '⚠ WATCHLIST ALERT';
+    t.appendChild(title);
+
+    const plateLine = document.createElement('div');
+    plateLine.style.cssText = 'margin-top:.3rem;';
+    const plateStrong = document.createElement('strong');
+    plateStrong.textContent = a.plate || '—';
+    plateLine.appendChild(plateStrong);
+    plateLine.appendChild(document.createTextNode(' — ' + (a.category || 'match')));
+    t.appendChild(plateLine);
+
+    if (a.description) {
+        const descLine = document.createElement('div');
+        descLine.style.cssText = 'opacity:.9; margin-top:.15rem;';
+        descLine.textContent = a.description;
+        t.appendChild(descLine);
+    }
+
+    const metaLine = document.createElement('div');
+    metaLine.style.cssText = 'opacity:.75; font-size:.72rem; margin-top:.3rem;';
+    metaLine.textContent = (a.camera || '') + (a.severity ? ' · ' + a.severity : '');
+    t.appendChild(metaLine);
+
+    host.appendChild(t);
+    setTimeout(() => { t.style.opacity = '0'; t.style.transition = 'opacity .5s'; setTimeout(() => t.remove(), 500); }, 10000);
+}
+
 function renderEvent(d, prepend = true) {
     if (evtsEmpty) evtsEmpty.style.display = 'none';
 
@@ -737,6 +781,8 @@ function connectWS() {
             } else if (msg.type === 'NEW_DETECTION') {
                 renderEvent(msg.data, true);
                 prependReportRow(msg.data);
+            } else if (msg.type === 'WATCHLIST_ALERT') {
+                showWatchlistAlert(msg.data && msg.data.alert ? msg.data.alert : msg.data);
             } else if (msg.type === 'INIT_BACKLOG' && Array.isArray(msg.data)) {
                 msg.data.slice().reverse().forEach(d => renderEvent(d, true));
             }

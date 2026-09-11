@@ -447,26 +447,35 @@ def persons_watchlist_page(
 
 
 @router.get("/alerts", response_class=HTMLResponse)
-def alerts_placeholder(
+def alerts_page(
     request: Request,
     user: Optional[UserModel] = Depends(get_optional_current_user),
 ):
-    # Every other page in this router redirects an anonymous visitor to
-    # /login - this one didn't (AuditReport1.md finding 20 / 4.2), so an
-    # unauthenticated visitor could reach it directly even though it's
-    # gated in the nav for logged-in users only. Nothing sensitive is
-    # rendered here (it's a static "not built yet" placeholder), but the
-    # inconsistency was worth closing to match every sibling page.
+    """Watchlist Alerts — list, acknowledge, and live alert stream."""
     if not user:
         return RedirectResponse(url="/login", status_code=302)
     return request.app.state.templates.TemplateResponse(
         request=request,
-        name="placeholder.html",
-        context={
-            "user": user,
-            "page_title": "Alerts",
-            "description": "Model 2 — not built yet, see docs/API_Contract.md §2",
-        },
+        name="alerts.html",
+        context={"user": user},
+    )
+
+
+# ── ANPR Pipeline Test page (Model 2) ─────────────────────────
+
+
+@router.get("/anpr", response_class=HTMLResponse)
+def anpr_page(
+    request: Request,
+    user: Optional[UserModel] = Depends(get_optional_current_user),
+):
+    """ANPR Pipeline Test — upload image and test full pipeline."""
+    if not user:
+        return RedirectResponse(url="/login", status_code=302)
+    return request.app.state.templates.TemplateResponse(
+        request=request,
+        name="anpr.html",
+        context={"user": user},
     )
 
 

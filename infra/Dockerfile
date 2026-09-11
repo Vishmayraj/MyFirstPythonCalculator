@@ -12,6 +12,9 @@ COPY model1-registry/requirements.txt /app/requirements.txt
 COPY model2_analytics/requirements.txt /app/requirements-model2.txt
 RUN pip install --no-cache-dir -r requirements.txt -r requirements-model2.txt
 
+# ANPR pipeline deps (needed by model2_analytics/pipeline — plate detect + OCR)
+RUN pip install --no-cache-dir ultralytics onnxruntime onnxocr
+
 # Copy source
 COPY shared/ /app/shared/
 COPY model1-registry/app/ /app/app/
